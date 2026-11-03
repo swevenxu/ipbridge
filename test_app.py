@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Minimal checks: filename safety, the upload round trip, and no login."""
 import http.client
+import io
 import os
 import tempfile
 import threading
 import unittest
 import uuid
+import zipfile
 
 os.environ.setdefault("STORE", tempfile.mkdtemp(prefix="pb-test-"))
 os.environ.setdefault("PORT", "0")
@@ -114,6 +116,48 @@ class Live(unittest.TestCase):
         finally:
             for path in (old, new):
                 os.remove(path)
+
+    def test_download_and_streamed_zip(self):
+        name = "dl-%s.jpg" % uuid.uuid4().hex[:8]
+        data = b"\xff\xd8\xff\xd9payload-bytes"
+        with open(os.path.join(app.STORE, name), "wb") as fh:
+            fh.write(data)
+        try:
+            status, head, body = self.req("GET", "/download/" + name)
+            self.assertEqual(status, 200)
+            self.assertIn("attachment", head.get("Content-Disposition", ""))
+            self.assertEqual(body, data)                   # untouched bytes
+
+            status, head, body = self.req("GET", "/download-all")
+            self.assertEqual(status, 200)
+            self.assertEqual(head.get("Content-Type"), "application/zip")
+            self.assertIn("attachment", head.get("Content-Disposition", ""))
+            bundle = zipfile.ZipFile(io.BytesIO(body))
+            self.assertIn(name, bundle.namelist())
+            self.assertEqual(bundle.read(name), data)
+        finally:
+            os.remove(os.path.join(app.STORE, name))
+
+    def test_delete_all_needs_the_word(self):
+        keep = os.path.join(app.STORE, "keep-%s.jpg" % uuid.uuid4().hex[:8])
+        with open(keep, "wb") as fh:
+            fh.write(b"x")
+        try:
+            status, _, _ = self.req(
+                "POST", "/delete-all", "confirm=yes",
+                {"Content-Type": "application/x-www-form-urlencoded"})
+            self.assertEqual(status, 400)
+            self.assertTrue(os.path.exists(keep))
+
+            status, _, body = self.req(
+                "POST", "/delete-all", "confirm=DELETE",
+                {"Content-Type": "application/x-www-form-urlencoded"})
+            self.assertEqual(status, 200)
+            self.assertIn(b'"deleted"', body)
+            self.assertEqual(app.media_files(), [])
+        finally:
+            if os.path.exists(keep):
+                os.remove(keep)
 
     def test_delete_rejects_traversal(self):
         status, _, _ = self.req(

@@ -11,6 +11,7 @@ import html
 import os
 import re
 import time
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote
 
@@ -40,6 +41,36 @@ def media_files(order="newest"):
     out.sort(key=lambda f: os.path.getmtime(os.path.join(STORE, f)),
              reverse=(order != "oldest"))
     return out
+
+
+CONTENT_TYPES = {
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+    ".gif": "image/gif", ".heic": "image/heic", ".mov": "video/quicktime",
+    ".mp4": "video/mp4",
+}
+
+
+def content_type(name: str) -> str:
+    return CONTENT_TYPES.get(os.path.splitext(name)[1].lower(),
+                             "application/octet-stream")
+
+
+class Chunked:
+    """Tiny chunked encoder: a zip can stream without knowing its length."""
+
+    def __init__(self, wfile):
+        self.wfile = wfile
+
+    def write(self, data):
+        if not data:
+            return 0
+        self.wfile.write(b"%x\r\n" % len(data))
+        self.wfile.write(data)
+        self.wfile.write(b"\r\n")
+        return len(data)
+
+    def flush(self):
+        self.wfile.flush()
 
 
 def human(n: int) -> str:
@@ -90,7 +121,11 @@ PAGE = """<!doctype html>
 
 <footer class="foot">
   <div class="wrap">
-    <span>__USED__ used</span>
+    <span class="tools">
+      <a class="tool" id="dlall" href="/download-all">Download all</a>
+      <button class="tool danger" id="remove-all" type="button">Remove all</button>
+    </span>
+    <span class="used">__USED__ used</span>
   </div>
 </footer>
 </body></html>"""
@@ -167,6 +202,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_body(200, "text/html; charset=utf-8", body.encode())
         if path.startswith("/media/"):
             return self.media(unquote(path[len("/media/"):]))
+        if path == "/download-all":
+            return self.download_all()
+        if path.startswith("/download/"):
+            return self.download(unquote(path[len("/download/"):]))
         return self.send_body(404, "text/plain", b"not found")
 
     def static(self, name):
@@ -192,15 +231,45 @@ class Handler(BaseHTTPRequestHandler):
         path = os.path.join(STORE, safe)
         if safe != name or not os.path.isfile(path):
             return self.send_body(404, "text/plain", b"not found")
-        ext = os.path.splitext(safe)[1].lower()
-        ctype = {
-            ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
-            ".gif": "image/gif", ".heic": "image/heic", ".mov": "video/quicktime",
-            ".mp4": "video/mp4",
-        }.get(ext, "application/octet-stream")
-        self.send_file(path, ctype)
+        self.send_file(path, content_type(safe))
 
-    def send_file(self, path, ctype, cache="private, max-age=86400"):
+    def download(self, name):
+        safe = safe_name(name)
+        path = os.path.join(STORE, safe)
+        if safe != name or not os.path.isfile(path):
+            return self.send_body(404, "text/plain", b"not found")
+        # attachment: the laptop saves it, modern iOS puts it in Files. Safari on
+        # iOS 9 has no save sheet for video, so there it just plays.
+        self.send_file(path, content_type(safe), attachment=safe)
+
+    def download_all(self):
+        """One zip, streamed: no temp file, no disk doubling, no compression.
+
+        JPEG and H.264 are already packed, so ZIP_STORED costs almost no CPU;
+        the length is unknown up front, so the body goes out chunked.
+        """
+        files = media_files()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/zip")
+        self.send_header("Content-Disposition",
+                         'attachment; filename="114s-%s.zip"'
+                         % time.strftime("%Y%m%d-%H%M%S"))
+        self.send_header("Transfer-Encoding", "chunked")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        if self.command == "HEAD":
+            return
+        try:
+            with zipfile.ZipFile(Chunked(self.wfile), "w",
+                                 zipfile.ZIP_STORED) as bundle:
+                for f in files:
+                    bundle.write(os.path.join(STORE, f), arcname=f)
+            self.wfile.write(b"0\r\n\r\n")
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+
+    def send_file(self, path, ctype, cache="private, max-age=86400",
+                  attachment=None):
         """One file, honouring Range.
 
         iOS will not play video from a server that answers 200 to a byte-range
@@ -233,6 +302,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Cache-Control", cache)
+        if attachment:
+            self.send_header("Content-Disposition",
+                             'attachment; filename="%s"' % attachment)
         if partial:
             self.send_header("Content-Range", "bytes %d-%d/%d" % (start, end, size))
         self.end_headers()
@@ -254,6 +326,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.upload()
         if path == "/delete":
             return self.delete()
+        if path == "/delete-all":
+            return self.delete_all()
         return self.send_body(404, "text/plain", b"not found")
 
     def body(self):
@@ -330,6 +404,20 @@ class Handler(BaseHTTPRequestHandler):
             return self.json(200, {"ok": True, "already_gone": True})
         os.remove(path)
         return self.json(200, {"ok": True})
+
+    def delete_all(self):
+        """Permanent, and gated on typing the word: there is no login here, so
+        the only thing between the archive and a stray tap is that prompt."""
+        if (self.form().get("confirm") or [""])[0] != "DELETE":
+            return self.json(400, {"ok": False, "error": "type DELETE to confirm"})
+        gone = 0
+        for name in media_files():
+            try:
+                os.remove(os.path.join(STORE, name))
+                gone += 1
+            except OSError:
+                pass
+        return self.json(200, {"ok": True, "deleted": gone})
 
     def json(self, code, obj):
         import json as _json

@@ -5,7 +5,7 @@
   var status = document.getElementById('status');
   var fallback = document.getElementById('fallback');
   var gallery = document.querySelector('.gallery');
-  var used = document.querySelector('.foot span');
+  var used = document.querySelector('.foot .used');
 
   function say(text, isError) {
     if (!status) { return; }
@@ -155,7 +155,7 @@
   }, false);
 
   // ---- viewer: tap a tile to see it big, arrows / swipe / keys to move ----
-  var box = null, stage = null, counter = null;
+  var box = null, stage = null, counter = null, save = null;
   var items = [], at = 0, isOpen = false;
 
   function buildViewer() {
@@ -164,7 +164,10 @@
     box.className = 'viewer';
     box.innerHTML =
       '<div class="vbar">' +
-        '<span class="vcount"></span>' +
+        '<div class="vleft">' +
+          '<span class="vcount"></span>' +
+          '<a class="vsave" href="#" download>Save</a>' +
+        '</div>' +
         '<button class="vclose" type="button" aria-label="Close">&times;</button>' +
       '</div>' +
       '<div class="vstage"></div>' +
@@ -175,6 +178,7 @@
     document.body.appendChild(box);
     stage = box.querySelector('.vstage');
     counter = box.querySelector('.vcount');
+    save = box.querySelector('.vsave');
     box.querySelector('.vclose').addEventListener('click', close, false);
     box.querySelector('.vprev').addEventListener('click', function () { show(at - 1); }, false);
     box.querySelector('.vnext').addEventListener('click', function () { show(at + 1); }, false);
@@ -222,6 +226,7 @@
         'preload="metadata"></video>'
       : '<img src="' + src + '" alt="">';
     counter.textContent = (i + 1) + ' / ' + items.length;
+    save.setAttribute('href', item.href.replace('/media/', '/download/'));
   }
 
   function openAt(i) {
@@ -299,6 +304,30 @@
       };
       xhr.send('name=' + encodeURIComponent(name));
     });
+  }
+
+  var removeAll = document.getElementById('remove-all');
+  if (removeAll) {
+    removeAll.addEventListener('click', function () {
+      var answer = window.prompt('This deletes every photo and clip for good.\n' +
+                                 'Type DELETE to confirm.');
+      if (answer !== 'DELETE') {
+        say('Remove all cancelled');
+        return;
+      }
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', '/delete-all');
+      xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+      xhr.onload = function () {
+        if (xhr.status === 200) {
+          window.location.href = '/';
+        } else {
+          say('Remove all failed (' + xhr.status + ')', true);
+        }
+      };
+      xhr.onerror = function () { say('Network error during remove all', true); };
+      xhr.send('confirm=DELETE');
+    }, false);
   }
 
   var buttons = document.querySelectorAll('.del');

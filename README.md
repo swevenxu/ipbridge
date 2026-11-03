@@ -47,9 +47,10 @@ python3 app.py                   # http://<your-ip>:8080
 python3 test_app.py
 ```
 
-Six checks: filename traversal, byte-range serving, the sort toggle, the login
-routes being gone, delete rejecting traversal, and a live round trip covering
-upload, gallery and delete.
+Eight checks: filename traversal, byte-range serving, the sort toggle, an
+original download plus a readable streamed zip, remove-all refusing anything
+but the word DELETE, the login routes being gone, delete rejecting traversal,
+and a live round trip covering upload, gallery and delete.
 
 ## Deploy
 
@@ -100,6 +101,20 @@ Two things decide whether a clip actually plays:
 The upload cap is buffered in memory, so `MAX_MB` is also the RAM one upload
 can consume. Videos fill a disk far faster than photos; the footer shows the
 total, and nothing is deleted automatically.
+
+## Getting files out
+
+- `/download/<name>` sends the original bytes with `Content-Disposition:
+  attachment`. The viewer's **Save** link points there. A laptop saves the file;
+  iOS 13+ puts it in Files. Safari on iOS 9 has no save sheet for video, so
+  there a clip still just plays.
+- **Download all** — laptop widths only — streams the whole store as one zip
+  from `/download-all`. Entries are stored, not compressed: JPEG and H.264 are
+  already packed, so zipping costs no CPU and needs no temp file, but it is
+  still every byte you have.
+- **Remove all** in the footer asks you to type `DELETE`, then removes every
+  file permanently. No login, no trash, no undo: anyone who can reach the page
+  can fire it.
 
 ## Security, plainly
 
