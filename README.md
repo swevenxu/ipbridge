@@ -28,7 +28,7 @@ PIN=2468 python3 app.py          # http://<your-ip>:8080
 
 | Env | Default | Meaning |
 |---|---|---|
-| `PIN` | *(empty — refuses logins)* | Shared PIN for both phones |
+| `PIN` | *(empty = completely open)* | Shared PIN; leave unset to disable auth entirely |
 | `PORT` | `8080` | Listen port |
 | `STORE` | `./uploads` | Where photos live; also holds `.secret` |
 | `MAX_MB` | `100` | Per-request upload cap |
@@ -76,6 +76,8 @@ for the 4S.
   network you trust; do not treat the PIN as encryption.
 - The PIN is rate-limited (6 tries / 5 min per IP) and compared in constant
   time, but it is a door, not a vault.
+- With no PIN set the gallery is open to anyone who has the URL. That is a
+  deliberate mode, not a bug: public hosts get found by scanners.
 - Uploads are validated by extension and stored under a generated name; deletes
   accept a bare filename only, resolved inside `STORE`.
 - Serve it to the internet and you own that exposure. Bind it to a VPN instead

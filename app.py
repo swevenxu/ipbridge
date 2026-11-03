@@ -206,7 +206,8 @@ class Handler(BaseHTTPRequestHandler):
         return ""
 
     def authed(self):
-        return valid_token(self.cookie_value())
+        # No PIN configured = deliberately open. Anyone with the URL is in.
+        return not PIN or valid_token(self.cookie_value())
 
     def form(self):
         n = int(self.headers.get("Content-Length") or 0)
@@ -235,6 +236,8 @@ class Handler(BaseHTTPRequestHandler):
                 len(media_files()), "" if len(media_files()) == 1 else "s"))
                        .replace("__TILES__", tiles())
                        .replace("__USED__", human(used)))
+            if not PIN:
+                body = body.replace('<a href="/logout">Sign out</a>', "")
             return self.send_body(200, "text/html; charset=utf-8", body.encode())
         if path.startswith("/media/"):
             return self.media(unquote(path[len("/media/"):]))
@@ -285,7 +288,7 @@ class Handler(BaseHTTPRequestHandler):
         if count >= 6 and time.time() - first < 300:
             return self.send_body(429, "text/plain", b"too many attempts, wait 5 min")
         if not PIN:
-            return self.send_body(500, "text/plain", b"PIN not configured on the server")
+            return self.redirect("/")
         pin = (self.form().get("pin") or [""])[0]
         if not hmac.compare_digest(pin, PIN):
             ATTEMPTS[ip] = (count + 1, first)
