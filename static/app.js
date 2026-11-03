@@ -1,9 +1,11 @@
 /* Photo Bridge — ES5 only. iOS 9 Safari has no fetch(), no NodeList.forEach,
-   no arrow functions in production code paths we rely on. */
+   no arrow functions. Uploads are downscaled first: a 4S photo is ~3 MB and a
+   phone radio at ~200 KB/s makes that a 15-second upload plus a re-download. */
 (function () {
   var picker = document.getElementById('picker');
   var status = document.getElementById('status');
-  var form = document.getElementById('fallback');
+  var fallback = document.getElementById('fallback');
+  var gallery = document.querySelector('.gallery');
 
   function say(text, isError) {
     if (!status) { return; }
@@ -12,10 +14,60 @@
   }
 
   if (!picker || !window.FormData || !window.XMLHttpRequest) {
-    // old/odd browser: expose the plain form as a fallback
-    if (form) { form.hidden = false; }
+    if (fallback) { fallback.hidden = false; }
     if (picker) { picker.style.display = 'block'; }
     return;
+  }
+
+  var MAX_EDGE = 1600;
+  var QUALITY = 0.82;
+  var SKIP_UNDER = 400 * 1024;
+
+  function shrink(file, done) {
+    if (!/^image\//.test(file.type) || file.size < SKIP_UNDER ||
+        !window.URL || !window.URL.createObjectURL || !document.createElement('canvas').getContext) {
+      return done(file);
+    }
+    var url = URL.createObjectURL(file);
+    var img = new Image();
+    var settled = false;
+    function finish(payload) {
+      if (settled) { return; }
+      settled = true;
+      try { URL.revokeObjectURL(url); } catch (e) {}
+      done(payload);
+    }
+    img.onload = function () {
+      try {
+        var w = img.width, h = img.height;
+        if (w > MAX_EDGE || h > MAX_EDGE) {
+          var scale = Math.min(MAX_EDGE / w, MAX_EDGE / h);
+          w = Math.round(w * scale);
+          h = Math.round(h * scale);
+        }
+        var canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        var dataURL = canvas.toDataURL('image/jpeg', QUALITY);
+        var binary = atob(dataURL.split(',')[1]);
+        var bytes = new Uint8Array(binary.length);
+        for (var i = 0; i < binary.length; i += 1) { bytes[i] = binary.charCodeAt(i); }
+        finish(new Blob([bytes], { type: 'image/jpeg' }));
+      } catch (err) {
+        finish(file);                      // canvas refused: send the original
+      }
+    };
+    img.onerror = function () { finish(file); };
+    img.src = url;
+  }
+
+  function tile(shrunk) {
+    var figure = document.createElement('figure');
+    figure.className = 'tile';
+    figure.innerHTML = '<div class="thumb pending">' +
+      (shrunk ? 'optimised' : 'uploaded') + '</div>';
+    if (gallery) { gallery.insertBefore(figure, gallery.firstChild); }
   }
 
   var busy = false;
@@ -25,42 +77,54 @@
     if (!files || !files.length || busy) { return; }
     busy = true;
     var total = files.length;
-    var i = 0;
+    var index = 0;
 
-    function next() {
-      if (i >= total) {
-        say('Uploaded ' + total + ' photo' + (total === 1 ? '' : 's'));
-        setTimeout(function () { window.location.href = '/'; }, 700);
+    function step() {
+      if (index >= total) {
+        busy = false;
+        picker.value = '';
         return;
       }
-      var fd = new FormData();
-      fd.append('photo', files[i]);
-      var xhr = new XMLHttpRequest();
-      xhr.open('POST', '/upload');
-      xhr.onload = function () {
-        if (xhr.status === 200) {
-          i += 1;
-          say('Uploading ' + Math.min(i + 1, total) + ' of ' + total + '\u2026');
-          next();
-        } else if (xhr.status === 403) {
-          say('Signed out. Reload the page.', true);
+      var file = files[index];
+      say('Preparing ' + (index + 1) + ' of ' + total + '\u2026');
+      shrink(file, function (payload) {
+        var shrunk = payload !== file;
+        var fd = new FormData();
+        try { fd.append('photo', payload, file.name); }
+        catch (e) { fd.append('photo', payload); }
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '/upload');
+        xhr.upload.onprogress = function (event) {
+          if (event.lengthComputable) {
+            say('Uploading ' + (index + 1) + ' of ' + total +
+                ' \u2014 ' + Math.round(event.loaded / event.total * 100) + '%');
+          }
+        };
+        xhr.onload = function () {
+          if (xhr.status === 200) {
+            tile(shrunk);
+            index += 1;
+            say('Uploaded ' + index + ' of ' + total);
+            step();
+          } else if (xhr.status === 403) {
+            busy = false;
+            say('Signed out. Reload the page.', true);
+          } else {
+            busy = false;
+            var msg = 'Upload failed (' + xhr.status + ')';
+            try { msg = JSON.parse(xhr.responseText).error || msg; } catch (e) {}
+            say(msg, true);
+          }
+        };
+        xhr.onerror = function () {
           busy = false;
-        } else {
-          var msg = 'Upload failed (' + xhr.status + ')';
-          try { msg = JSON.parse(xhr.responseText).error || msg; } catch (e) {}
-          say(msg, true);
-          busy = false;
-        }
-      };
-      xhr.onerror = function () {
-        say('Network error during upload', true);
-        busy = false;
-      };
-      say('Uploading ' + (i + 1) + ' of ' + total + '\u2026');
-      xhr.send(fd);
+          say('Network error during upload', true);
+        };
+        xhr.send(fd);
+      });
     }
 
-    next();
+    step();
   });
 
   var buttons = document.querySelectorAll('.del');
@@ -70,15 +134,15 @@
       var name = this.getAttribute('data-name');
       if (!window.confirm('Delete this photo?')) { return; }
       var button = this;
-      var tile = this.parentNode;
-      button.disabled = true;                  // no double-fire on a slow tap
+      var tileNode = this.parentNode;
+      button.disabled = true;
       var xhr = new XMLHttpRequest();
       xhr.open('POST', '/delete');
       xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
       xhr.onload = function () {
-        // 200 = deleted, 404 = already gone; both mean "it's not there any more"
+        // 200 = deleted, 404 = already gone; both mean it is not there any more
         if (xhr.status === 200 || xhr.status === 404) {
-          if (tile.parentNode) { tile.parentNode.removeChild(tile); }
+          if (tileNode.parentNode) { tileNode.parentNode.removeChild(tileNode); }
           say('Deleted');
         } else if (xhr.status === 403) {
           button.disabled = false;

@@ -248,7 +248,9 @@ class Handler(BaseHTTPRequestHandler):
         if not os.path.isfile(path):
             return self.send_body(404, "text/plain", b"not found")
         with open(path, "rb") as fh:
-            self.send_body(200, ctype, fh.read(), {"Cache-Control": "public, max-age=3600"})
+            data = fh.read()
+        # no-cache: a cached app.js silently disables client fixes on old browsers
+        self.send_body(200, ctype, data, {"Cache-Control": "no-cache"})
 
     def media(self, name):
         safe = safe_name(name)

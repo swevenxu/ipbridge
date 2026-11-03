@@ -98,6 +98,15 @@ h1 { font-size: 17px; margin: 0; letter-spacing: -0.2px; }
   height: auto;
   min-height: 118px;
 }
+
+/* placeholder tile shown right after an upload; no image bytes to download */
+.pending {
+  display: -webkit-flex; display: flex;
+  -webkit-align-items: center; align-items: center;
+  -webkit-justify-content: center; justify-content: center;
+  color: #8a8a8e; font-size: 12px; letter-spacing: .3px;
+}
+
 figcaption {
   font-size: 11px;
   color: #8a8a8e;
