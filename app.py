@@ -299,15 +299,49 @@ class Handler(BaseHTTPRequestHandler):
             COOKIE, token(), DAYS * 86400)
         self.send_body(303, "text/plain", b"", {"Location": "/", "Set-Cookie": cookie})
 
+    def body(self):
+        """Request body, chunked or not.
+
+        iOS 9 Safari uploads with Transfer-Encoding: chunked. Reading only
+        Content-Length there gives an empty body, and answering before the
+        client finishes makes the phone see a reset instead of a response.
+        """
+        if "chunked" in (self.headers.get("Transfer-Encoding") or "").lower():
+            out = []
+            total = 0
+            while True:
+                line = self.rfile.readline(1024)
+                if not line:
+                    break
+                size = int(line.strip().split(b";")[0] or b"0", 16)
+                if size == 0:
+                    while True:                      # trailers
+                        trailer = self.rfile.readline(1024)
+                        if trailer in (b"\r\n", b"\n", b""):
+                            break
+                    break
+                total += size
+                if total > MAX_BYTES:
+                    raise ValueError("too large")
+                out.append(self.rfile.read(size))
+                self.rfile.read(2)                   # CRLF after each chunk
+            return b"".join(out)
+        n = int(self.headers.get("Content-Length") or 0)
+        if n > MAX_BYTES:
+            raise ValueError("too large")
+        return self.rfile.read(n) if n > 0 else b""
+
     def upload(self):
         ctype = self.headers.get("Content-Type") or ""
         m = re.search(r'boundary="?([^";]+)"?', ctype)
         if "multipart/form-data" not in ctype or not m:
             return self.json(400, {"ok": False, "error": "expected multipart"})
-        length = int(self.headers.get("Content-Length") or 0)
-        if length <= 0 or length > MAX_BYTES:
+        try:
+            raw = self.body()
+        except ValueError:
             return self.json(413, {"ok": False, "error": "file too large"})
-        raw = self.rfile.read(length)
+        if not raw:
+            return self.json(400, {"ok": False, "error": "empty body"})
         msg = email.parser.BytesParser(policy=email.policy.default).parsebytes(
             b"Content-Type: multipart/form-data; boundary=" + m.group(1).encode()
             + b"\r\n\r\n" + raw)
