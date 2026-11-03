@@ -4,3 +4,4 @@ __pycache__/
 .secret
 .DS_Store
 .pin.local
+.pin

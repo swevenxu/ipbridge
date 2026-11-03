@@ -19,8 +19,23 @@ from urllib.parse import parse_qs, quote, unquote
 ROOT = os.path.dirname(os.path.abspath(__file__))
 STORE = os.environ.get("STORE", os.path.join(ROOT, "uploads"))
 STATIC = os.path.join(ROOT, "static")
-PORT = int(os.environ.get("PORT", "8080"))
-PIN = os.environ.get("PIN", "")
+# Panels (Pterodactyl-style) inject SERVER_PORT instead of PORT.
+PORT = int(os.environ.get("PORT") or os.environ.get("SERVER_PORT") or 8080)
+
+
+def _pin():
+    """Env first; then a file, because panels give you nowhere to put env vars."""
+    env = os.environ.get("PIN", "").strip()
+    if env:
+        return env
+    path = os.path.join(ROOT, ".pin")
+    if os.path.isfile(path):
+        return open(path).read().strip()
+    return ""
+
+
+PIN = _pin()
+
 MAX_BYTES = int(os.environ.get("MAX_MB", "100")) * 1024 * 1024
 MEDIA = {".jpg", ".jpeg", ".png", ".gif", ".heic", ".mov", ".mp4"}
 COOKIE = "pb"
