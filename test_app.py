@@ -57,6 +57,7 @@ class Live(unittest.TestCase):
         status, _, page = self.req("GET", "/")
         self.assertEqual(status, 200)
         self.assertIn(b"/media/a-", page)
+        self.assertIn(b'data-size="', page)
 
         name = app.media_files()[0]
         status, _, _ = self.req("POST", "/delete", "name=" + name,

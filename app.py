@@ -98,17 +98,17 @@ def tiles():
     out = []
     for f in files:
         src = "/media/" + quote(f)
-        size = human(os.path.getsize(os.path.join(STORE, f)))
+        n = os.path.getsize(os.path.join(STORE, f))
         if os.path.splitext(f)[1].lower() in {".mov", ".mp4"}:
             media = '<video src="%s" playsinline muted preload="metadata"></video>' % src
         else:
             media = '<img src="%s" alt="" loading="lazy">' % src
         out.append(
-            '<figure class="tile">'
+            '<figure class="tile" data-size="%d">'
             '<a class="thumb" href="%s">%s</a>'
             '<button class="del" data-name="%s" aria-label="Delete photo">&times;</button>'
             '<figcaption>%s</figcaption>'
-            "</figure>" % (src, media, html.escape(f, quote=True), size)
+            "</figure>" % (n, src, media, html.escape(f, quote=True), human(n))
         )
     return "".join(out)
 
