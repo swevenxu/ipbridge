@@ -1,6 +1,5 @@
-/* Photo Bridge — ES5 only. iOS 9 Safari has no fetch(), no NodeList.forEach,
-   no arrow functions. Uploads are downscaled first: a 4S photo is ~3 MB and a
-   phone radio at ~200 KB/s makes that a 15-second upload plus a re-download. */
+/* 114s — ES5 only. iOS 9 Safari has no fetch(), no NodeList.forEach, no arrow
+   functions. Files upload byte for byte: no downscale, no re-encode. */
 (function () {
   var picker = document.getElementById('picker');
   var status = document.getElementById('status');
@@ -18,49 +17,6 @@
     if (fallback) { fallback.hidden = false; }
     if (picker) { picker.style.display = 'block'; }
     return;
-  }
-
-  var MAX_EDGE = 1600;
-  var QUALITY = 0.82;
-  var SKIP_UNDER = 400 * 1024;
-
-  function shrink(file, done) {
-    if (!/^image\//.test(file.type) || file.size < SKIP_UNDER ||
-        !window.URL || !window.URL.createObjectURL || !document.createElement('canvas').getContext) {
-      return done(file);
-    }
-    var url = URL.createObjectURL(file);
-    var img = new Image();
-    var settled = false;
-    function finish(payload) {
-      if (settled) { return; }
-      settled = true;
-      try { URL.revokeObjectURL(url); } catch (e) {}
-      done(payload);
-    }
-    img.onload = function () {
-      try {
-        var w = img.width, h = img.height;
-        if (w > MAX_EDGE || h > MAX_EDGE) {
-          var scale = Math.min(MAX_EDGE / w, MAX_EDGE / h);
-          w = Math.round(w * scale);
-          h = Math.round(h * scale);
-        }
-        var canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
-        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-        var dataURL = canvas.toDataURL('image/jpeg', QUALITY);
-        var binary = atob(dataURL.split(',')[1]);
-        var bytes = new Uint8Array(binary.length);
-        for (var i = 0; i < binary.length; i += 1) { bytes[i] = binary.charCodeAt(i); }
-        finish(new Blob([bytes], { type: 'image/jpeg' }));
-      } catch (err) {
-        finish(file);                      // canvas refused: send the original
-      }
-    };
-    img.onerror = function () { finish(file); };
-    img.src = url;
   }
 
   function human(n) {
@@ -125,40 +81,37 @@
         return;
       }
       var file = files[index];
-      say('Preparing ' + (index + 1) + ' of ' + total + '\u2026');
-      shrink(file, function (payload) {
-        var fd = new FormData();
-        try { fd.append('photo', payload, file.name); }
-        catch (e) { fd.append('photo', payload); }
-        var xhr = new XMLHttpRequest();
-        xhr.open('POST', '/upload');
-        xhr.upload.onprogress = function (event) {
-          if (event.lengthComputable) {
-            say('Uploading ' + (index + 1) + ' of ' + total +
-                ' \u2014 ' + Math.round(event.loaded / event.total * 100) + '%');
-          }
-        };
-        xhr.onload = function () {
-          if (xhr.status === 200) {
-            var saved = [];
-            try { saved = JSON.parse(xhr.responseText).saved || []; } catch (e) {}
-            if (saved.length) { addTile(saved[0], payload); }
-            index += 1;
-            say('Uploaded ' + index + ' of ' + total);
-            step();
-          } else {
-            busy = false;
-            var msg = 'Upload failed (' + xhr.status + ')';
-            try { msg = JSON.parse(xhr.responseText).error || msg; } catch (e) {}
-            say(msg, true);
-          }
-        };
-        xhr.onerror = function () {
+      var fd = new FormData();
+      try { fd.append('photo', file, file.name); }
+      catch (e) { fd.append('photo', file); }
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', '/upload');
+      xhr.upload.onprogress = function (event) {
+        if (event.lengthComputable) {
+          say('Uploading ' + (index + 1) + ' of ' + total +
+              ' \u2014 ' + Math.round(event.loaded / event.total * 100) + '%');
+        }
+      };
+      xhr.onload = function () {
+        if (xhr.status === 200) {
+          var saved = [];
+          try { saved = JSON.parse(xhr.responseText).saved || []; } catch (e) {}
+          if (saved.length) { addTile(saved[0], file); }
+          index += 1;
+          say('Uploaded ' + index + ' of ' + total);
+          step();
+        } else {
           busy = false;
-          say('Network error during upload', true);
-        };
-        xhr.send(fd);
-      });
+          var msg = 'Upload failed (' + xhr.status + ')';
+          try { msg = JSON.parse(xhr.responseText).error || msg; } catch (e) {}
+          say(msg, true);
+        }
+      };
+      xhr.onerror = function () {
+        busy = false;
+        say('Network error during upload', true);
+      };
+      xhr.send(fd);
     }
 
     step();
