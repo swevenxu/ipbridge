@@ -12,6 +12,6 @@ ENV PORT=8080 \
 EXPOSE 8080
 VOLUME ["/app/uploads"]
 
-# PIN and SECRET belong in the environment, not the image:
-#   docker run -e PIN=2468 -v photos:/app/uploads -p 8080:8080 photobridge
+# Photos live in the volume, never in the image:
+#   docker run -v photos:/app/uploads -p 8080:8080 photobridge
 CMD ["python3", "app.py"]

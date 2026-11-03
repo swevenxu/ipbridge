@@ -3,12 +3,10 @@
 
 Runs on the Python standard library alone. One file of state: the uploads dir.
 
-    PIN=1234 python3 app.py            # http://<host>:8080
+    python3 app.py                     # http://<host>:8080
 """
 import email
 import email.policy
-import hashlib
-import hmac
 import html
 import os
 import re
@@ -18,62 +16,17 @@ from urllib.parse import parse_qs, quote, unquote
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 STORE = os.environ.get("STORE", os.path.join(ROOT, "uploads"))
+THUMBS = os.path.join(STORE, "thumbs")   # grid-sized copies; the gallery never loads full files
 STATIC = os.path.join(ROOT, "static")
 # Panels (Pterodactyl-style) inject SERVER_PORT instead of PORT.
 PORT = int(os.environ.get("PORT") or os.environ.get("SERVER_PORT") or 8080)
 
 
-def _pin():
-    """Env first; then a file, because panels give you nowhere to put env vars."""
-    env = os.environ.get("PIN", "").strip()
-    if env:
-        return env
-    path = os.path.join(ROOT, ".pin")
-    if os.path.isfile(path):
-        return open(path).read().strip()
-    return ""
-
-
-PIN = _pin()
-
 MAX_BYTES = int(os.environ.get("MAX_MB", "100")) * 1024 * 1024
 MEDIA = {".jpg", ".jpeg", ".png", ".gif", ".heic", ".mov", ".mp4"}
-COOKIE = "pb"
-DAYS = 30
 
 os.makedirs(STORE, exist_ok=True)
-
-
-def _secret():
-    """Persisted in the store so sessions survive restarts and redeploys."""
-    path = os.path.join(STORE, ".secret")
-    if os.path.exists(path):
-        return open(path, "rb").read()
-    data = os.urandom(32)
-    open(path, "wb").write(data)
-    os.chmod(path, 0o600)
-    return data
-
-
-SECRET = _secret()
-ATTEMPTS = {}  # ip -> [count, first_ts]
-
-
-def token() -> str:
-    exp = str(int(time.time()) + DAYS * 86400)
-    mac = hmac.new(SECRET, exp.encode(), hashlib.sha256).hexdigest()[:32]
-    return exp + "." + mac
-
-
-def valid_token(raw: str) -> bool:
-    try:
-        exp, mac = raw.split(".")
-    except (ValueError, AttributeError):
-        return False
-    if not exp.isdigit() or int(exp) < time.time():
-        return False
-    want = hmac.new(SECRET, exp.encode(), hashlib.sha256).hexdigest()[:32]
-    return hmac.compare_digest(mac, want)
+os.makedirs(THUMBS, exist_ok=True)
 
 
 def safe_name(name: str) -> str:
@@ -98,24 +51,26 @@ def human(n: int) -> str:
 PAGE = """<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="format-detection" content="telephone=no">
-<title>Photo Bridge</title>
+<title>114s</title>
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/app.js" defer></script>
 </head><body>
 <header class="bar">
-  <h1>Photo Bridge</h1>
-  <span class="count">__COUNT__</span>
+  <div class="wrap">
+    <h1>114s</h1>
+    <span class="count">__COUNT__</span>
+  </div>
 </header>
 
-<main>
+<main class="wrap">
   <section class="uploader">
+    <input id="picker" type="file" name="photo" accept="image/*,video/*" multiple>
     <label class="pick" for="picker">
       <span class="pick-plus">+</span>
       <span class="pick-label">Add photos</span>
     </label>
-    <input id="picker" type="file" name="photo" accept="image/*,video/*" multiple>
     <form id="fallback" method="post" action="/upload" enctype="multipart/form-data" hidden>
       <input type="file" name="photo">
       <button type="submit">Upload</button>
@@ -129,33 +84,17 @@ PAGE = """<!doctype html>
 </main>
 
 <footer class="foot">
-  <a href="/logout">Sign out</a>
-  <span>__USED__</span>
+  <div class="wrap">
+    <span>__USED__ used</span>
+  </div>
 </footer>
 </body></html>"""
-
-LOGIN = """<!doctype html>
-<html lang="en"><head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Photo Bridge</title>
-<link rel="stylesheet" href="/static/app.css">
-</head><body class="centered">
-<form class="login" method="post" action="/login">
-  <h1>Photo Bridge</h1>
-  <p>Enter the PIN.</p>
-  <input type="password" name="pin" inputmode="numeric" autocomplete="current-password"
-         autofocus aria-label="PIN">
-  <button type="submit">Open</button>
-  __ERROR__
-</form>
-</body></html>"""
-
 
 def tiles():
     files = media_files()
     if not files:
-        return '<p class="empty">No photos yet.</p>'
+        return ('<p class="empty"><strong>No photos yet</strong>'
+            'Photos you add here appear on both phones.</p>')
     out = []
     for f in files:
         src = "/media/" + quote(f)
@@ -182,32 +121,16 @@ class Handler(BaseHTTPRequestHandler):
         print("%s %s" % (self.address_string(), fmt % args), flush=True)
 
     # ---- plumbing ----
-    def send_body(self, code, ctype, body, extra=None, cookie=None):
+    def send_body(self, code, ctype, body, extra=None):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Content-Type-Options", "nosniff")
         for k, v in (extra or {}).items():
             self.send_header(k, v)
-        if cookie:
-            self.send_header("Set-Cookie", cookie)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
-
-    def redirect(self, where):
-        self.send_body(303, "text/plain", b"", {"Location": where})
-
-    def cookie_value(self):
-        for part in (self.headers.get("Cookie") or "").split(";"):
-            k, _, v = part.strip().partition("=")
-            if k == COOKIE:
-                return v
-        return ""
-
-    def authed(self):
-        # No PIN configured = deliberately open. Anyone with the URL is in.
-        return not PIN or valid_token(self.cookie_value())
 
     def form(self):
         n = int(self.headers.get("Content-Length") or 0)
@@ -219,38 +142,35 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?")[0]
-        if path == "/static/app.css":
-            return self.static("app.css", "text/css; charset=utf-8")
-        if path == "/static/app.js":
-            return self.static("app.js", "application/javascript; charset=utf-8")
-        if path == "/logout":
-            return self.send_body(303, "text/plain", b"", {
-                "Location": "/", "Set-Cookie": "%s=; Path=/; Max-Age=0" % COOKIE})
-        if not self.authed():
-            if path in ("/", ""):
-                return self.send_body(200, "text/html; charset=utf-8", LOGIN.encode())
-            return self.send_body(403, "text/plain", b"auth required")
+        if path.startswith("/static/"):
+            return self.static(path[len("/static/"):])
         if path in ("/", ""):
             used = sum(os.path.getsize(os.path.join(STORE, f)) for f in media_files())
             body = (PAGE.replace("__COUNT__", "%d photo%s" % (
                 len(media_files()), "" if len(media_files()) == 1 else "s"))
                        .replace("__TILES__", tiles())
                        .replace("__USED__", human(used)))
-            if not PIN:
-                body = body.replace('<a href="/logout">Sign out</a>', "")
             return self.send_body(200, "text/html; charset=utf-8", body.encode())
         if path.startswith("/media/"):
             return self.media(unquote(path[len("/media/"):]))
         return self.send_body(404, "text/plain", b"not found")
 
-    def static(self, name, ctype):
-        path = os.path.join(STATIC, name)
-        if not os.path.isfile(path):
+    def static(self, name):
+        safe = safe_name(name)
+        path = os.path.join(STATIC, safe)
+        if safe != name or not os.path.isfile(path):
             return self.send_body(404, "text/plain", b"not found")
+        ext = os.path.splitext(safe)[1].lower()
+        ctype = {".css": "text/css; charset=utf-8",
+                 ".js": "application/javascript; charset=utf-8",
+                 ".woff": "font/woff", ".ttf": "font/ttf"}.get(
+                     ext, "application/octet-stream")
         with open(path, "rb") as fh:
             data = fh.read()
-        # no-cache: a cached app.js silently disables client fixes on old browsers
-        self.send_body(200, ctype, data, {"Cache-Control": "no-cache"})
+        # fonts cache for a day; no-cache on code: a cached app.js silently
+        # disables client fixes on old browsers
+        cache = "public, max-age=86400" if ext in (".woff", ".ttf") else "no-cache"
+        self.send_body(200, ctype, data, {"Cache-Control": cache})
 
     def media(self, name):
         safe = safe_name(name)
@@ -270,36 +190,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split("?")[0]
-        if path == "/login":
-            return self.login()
-        if not self.authed():
-            # close: an unread POST body would otherwise be parsed as the next
-            # request on this keep-alive connection
-            self.close_connection = True
-            return self.send_body(403, "text/plain", b"auth required",
-                                  {"Connection": "close"})
         if path == "/upload":
             return self.upload()
         if path == "/delete":
             return self.delete()
         return self.send_body(404, "text/plain", b"not found")
-
-    def login(self):
-        ip = self.address_string()
-        count, first = ATTEMPTS.get(ip, (0, time.time()))
-        if count >= 6 and time.time() - first < 300:
-            return self.send_body(429, "text/plain", b"too many attempts, wait 5 min")
-        if not PIN:
-            return self.redirect("/")
-        pin = (self.form().get("pin") or [""])[0]
-        if not hmac.compare_digest(pin, PIN):
-            ATTEMPTS[ip] = (count + 1, first)
-            body = LOGIN.replace("__ERROR__", '<p class="error">Wrong PIN.</p>')
-            return self.send_body(401, "text/html; charset=utf-8", body.encode())
-        ATTEMPTS.pop(ip, None)
-        cookie = "%s=%s; Path=/; HttpOnly; SameSite=Lax; Max-Age=%d" % (
-            COOKIE, token(), DAYS * 86400)
-        self.send_body(303, "text/plain", b"", {"Location": "/", "Set-Cookie": cookie})
 
     def body(self):
         """Request body, chunked or not.
@@ -385,7 +280,5 @@ if __name__ == "__main__":
     if not os.path.isdir(STATIC):
         raise SystemExit("missing static/ next to app.py")
     srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
-    print("Photo Bridge on http://0.0.0.0:%d — store %s" % (PORT, STORE), flush=True)
-    if not PIN:
-        print("WARNING: PIN is empty — set PIN=<digits> before exposing this.", flush=True)
+    print("114s on http://0.0.0.0:%d — store %s" % (PORT, STORE), flush=True)
     srv.serve_forever()

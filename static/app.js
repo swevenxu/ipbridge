@@ -106,9 +106,6 @@
             index += 1;
             say('Uploaded ' + index + ' of ' + total);
             step();
-          } else if (xhr.status === 403) {
-            busy = false;
-            say('Signed out. Reload the page.', true);
           } else {
             busy = false;
             var msg = 'Upload failed (' + xhr.status + ')';
@@ -144,9 +141,6 @@
         if (xhr.status === 200 || xhr.status === 404) {
           if (tileNode.parentNode) { tileNode.parentNode.removeChild(tileNode); }
           say('Deleted');
-        } else if (xhr.status === 403) {
-          button.disabled = false;
-          say('Signed out. Reload the page.', true);
         } else {
           button.disabled = false;
           say('Delete failed (' + xhr.status + ')', true);

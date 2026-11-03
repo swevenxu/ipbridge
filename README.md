@@ -1,4 +1,4 @@
-# Photo Bridge
+# 114s
 
 A photo exchange site for two phones that have nothing in common: an iPhone 4S
 on iOS 9 (Safari only, no apps, **no working TLS trust**) and a modern iPhone.
@@ -11,9 +11,10 @@ Photos are files in a directory.
 The 4S rejects every TLS chain we can serve it, so the site must answer on
 **plain HTTP**. That single fact drives the design:
 
-- PIN login + HttpOnly session cookie (HMAC-signed, 30 days) instead of OAuth
-  or anything that needs TLS.
-- No thumbnails, no CDN, no external fonts — one CSS file, one JS file.
+- No login, no cookies: anyone who reaches the URL gets the gallery.
+- No thumbnails, no CDN, no external requests — one CSS file, one JS file,
+  and Space Grotesk self-hosted in `static/` (the 4S can't reach Google Fonts:
+  it rejects the TLS chain, and iOS 9 has no WOFF2).
 - Layout starts at 320 pt (iPhone 4S) and steps up at 375 pt (iPhone 11).
 - ES5 JavaScript: no `fetch`, no `NodeList.forEach`, no arrow functions.
 - No CSS grid or `object-fit`: iOS 9 Safari doesn't have them. Flexbox with
@@ -23,14 +24,13 @@ The 4S rejects every TLS chain we can serve it, so the site must answer on
 
 ```bash
 cd photobridge
-PIN=2468 python3 app.py          # http://<your-ip>:8080
+python3 app.py                   # http://<your-ip>:8080
 ```
 
 | Env | Default | Meaning |
 |---|---|---|
-| `PIN` | *(empty = completely open)* | Shared PIN; leave unset to disable auth entirely |
 | `PORT` | `8080` | Listen port |
-| `STORE` | `./uploads` | Where photos live; also holds `.secret` |
+| `STORE` | `./uploads` | Where photos live |
 | `MAX_MB` | `100` | Per-request upload cap |
 
 ## Test
@@ -39,8 +39,8 @@ PIN=2468 python3 app.py          # http://<your-ip>:8080
 python3 test_app.py
 ```
 
-Five checks: token round-trip, token tampering, filename traversal, and a live
-HTTP round trip covering 403-without-cookie, login, upload, gallery, delete.
+Four checks: filename traversal, the login routes being gone, delete rejecting
+traversal, and a live round trip covering upload, gallery and delete.
 
 ## Deploy
 
@@ -49,7 +49,7 @@ Any box with Docker works; the goal is one port the 4S can reach without TLS.
 **One-shot on a fresh VPS** (Ubuntu/Debian, root):
 
 ```bash
-PIN=246801 HOST_PORT=80 bash deploy/bootstrap.sh
+HOST_PORT=80 bash deploy/bootstrap.sh
 ```
 
 It installs Docker, clones this repo to `/opt/ipbridge`, writes `.env`, starts
@@ -59,7 +59,7 @@ firewall/security list afterwards.
 **Manual:**
 
 ```bash
-printf 'PIN=246801\nHOST_PORT=80\n' > .env     # PIN is required, compose refuses to start without it
+printf 'HOST_PORT=80\n' > .env                 # optional: compose defaults to 8080
 docker compose up -d --build
 ```
 
@@ -71,13 +71,10 @@ for the 4S.
 
 ## Security, plainly
 
-- On the 4S leg, the PIN and every photo cross the network **in cleartext**.
-  Anyone who can see that traffic can read both. Use it over a VPN or on a
-  network you trust; do not treat the PIN as encryption.
-- The PIN is rate-limited (6 tries / 5 min per IP) and compared in constant
-  time, but it is a door, not a vault.
-- With no PIN set the gallery is open to anyone who has the URL. That is a
-  deliberate mode, not a bug: public hosts get found by scanners.
+- There is no login. Anyone who can reach the URL can see, add and delete
+  photos; that is the trade this app makes on purpose.
+- On the 4S leg every photo crosses the network **in cleartext**. Use it on a
+  network you trust or over a VPN; public hosts get found by scanners.
 - Uploads are validated by extension and stored under a generated name; deletes
   accept a bare filename only, resolved inside `STORE`.
 - Serve it to the internet and you own that exposure. Bind it to a VPN instead

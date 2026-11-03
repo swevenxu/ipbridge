@@ -1,7 +1,4 @@
 uploads/
 __pycache__/
 *.pyc
-.secret
 .DS_Store
-.pin.local
-.pin

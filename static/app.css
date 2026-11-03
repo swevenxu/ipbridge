@@ -1,11 +1,36 @@
-/* Photo Bridge — tuned for a 320pt iPhone 4S first, then a 390pt iPhone 11.
-   iOS 9 constraints: flexbox with -webkit- prefix, no CSS grid, no object-fit,
-   no clamp(), no backdrop-filter. */
+/* Photo Bridge — 320pt iPhone 4S first, then 390pt iPhone 11, then a MacBook.
+   iOS 9 constraints: -webkit- flexbox prefixes, no CSS grid, no object-fit,
+   no clamp(), no backdrop-filter, no :focus-visible. Anything newer lives
+   behind @supports or a min-width the 4S never matches. */
+
+/* Space Grotesk, self-hosted and served from this app: the 4S rejects every
+   TLS chain, so fonts.googleapis.com is unreachable for it, and iOS 9 has no
+   WOFF2. WOFF works on iOS 5 and on every browser since. Latin subset only;
+   other characters fall back to the system font. */
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/static/SpaceGrotesk-Regular.woff") format("woff");
+}
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/static/SpaceGrotesk-Bold.woff") format("woff");
+}
 
 * { -webkit-box-sizing: border-box; box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body {
-  font: 16px/1.35 -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  display: -webkit-flex;
+  display: flex;
+  -webkit-flex-direction: column;
+  flex-direction: column;
+  min-height: 100vh;
+  font: 16px/1.35 "Space Grotesk", -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif;
   background: #f2f2f7;
   color: #111;
   -webkit-text-size-adjust: 100%;
@@ -13,6 +38,19 @@ body {
 }
 a { color: #0a84ff; text-decoration: none; }
 h1 { font-size: 17px; margin: 0; letter-spacing: -0.2px; }
+::selection { background: rgba(10,132,255,.22); }
+
+/* --- one container for header, gallery and footer --- */
+.wrap {
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 14px;
+}
+main.wrap {
+  -webkit-flex: 1 1 auto;
+  flex: 1 1 auto;
+}
 
 /* --- header --- */
 .bar {
@@ -20,21 +58,33 @@ h1 { font-size: 17px; margin: 0; letter-spacing: -0.2px; }
   position: sticky;
   top: 0;
   z-index: 5;
+  padding: 12px 0;
+  background: #fff;
+  border-bottom: 1px solid #d8d8dc;
+}
+.bar .wrap {
   display: -webkit-flex;
   display: flex;
   -webkit-align-items: center;
   align-items: center;
   -webkit-justify-content: space-between;
   justify-content: space-between;
-  padding: 12px 14px;
-  background: #fff;
-  border-bottom: 1px solid #d8d8dc;
 }
-.count { font-size: 13px; color: #8a8a8e; }
+.count { font-size: 13px; color: #6b6b70; }
 
 /* --- uploader --- */
-.uploader { padding: 14px 14px 4px; }
-#picker { display: none; }
+.uploader { position: relative; padding: 14px 0 2px; }
+/* clipped, not display:none: the file input must stay reachable by keyboard */
+#picker {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
 .pick {
   display: -webkit-flex;
   display: flex;
@@ -42,15 +92,21 @@ h1 { font-size: 17px; margin: 0; letter-spacing: -0.2px; }
   align-items: center;
   -webkit-justify-content: center;
   justify-content: center;
-  min-height: 56px;
+  min-height: 54px;
   border: 1.5px dashed #b9c6d6;
   border-radius: 12px;
   background: #fff;
   color: #0a84ff;
   font-weight: 600;
   cursor: pointer;
+  -webkit-transition: background-color .16s, border-color .16s;
+  transition: background-color .16s, border-color .16s;
 }
-.pick:active { background: #eef5ff; }
+.pick:active { background: #eef5ff; border-color: #0a84ff; }
+#picker:focus + .pick {
+  border-color: #0a84ff;
+  box-shadow: 0 0 0 3px rgba(10,132,255,.18);
+}
 .pick-plus {
   font-size: 22px;
   font-weight: 400;
@@ -59,31 +115,31 @@ h1 { font-size: 17px; margin: 0; letter-spacing: -0.2px; }
 }
 .pick-label { font-size: 16px; }
 .status {
-  margin: 8px 2px 0;
+  margin: 9px 2px 0;
   min-height: 18px;
   font-size: 13px;
   color: #0a84ff;
 }
 .status.err { color: #d70015; }
 
-/* --- gallery: 2 up on 320pt, 3 up from 375pt --- */
+/* --- gallery: 2 up at 320pt, 3 up from 375pt, 5 up on a laptop --- */
 .gallery {
   display: -webkit-flex;
   display: flex;
   -webkit-flex-wrap: wrap;
   flex-wrap: wrap;
-  margin: 0;
-  padding: 6px 10px 20px;
+  margin: 0 -5px;
+  padding: 6px 0 20px;
 }
 .tile {
   position: relative;
   -webkit-flex: 0 0 auto;
   flex: 0 0 auto;
-  width: -webkit-calc(50% - 8px);
-  width: calc(50% - 8px);
-  margin: 4px;
+  width: -webkit-calc(50% - 10px);
+  width: calc(50% - 10px);
+  margin: 5px;
   background: #fff;
-  border-radius: 10px;
+  border-radius: 12px;
   overflow: hidden;
 }
 .thumb {
@@ -92,11 +148,19 @@ h1 { font-size: 17px; margin: 0; letter-spacing: -0.2px; }
   overflow: hidden;
   background: #e6e6eb;
 }
+/* iOS 9 has no object-fit: the image is cropped from the top by the box. */
 .thumb img, .thumb video {
   display: block;
   width: 100%;
   height: auto;
   min-height: 118px;
+}
+@supports (object-fit: cover) {
+  .thumb img, .thumb video {
+    height: 118px;
+    min-height: 0;
+    object-fit: cover;
+  }
 }
 
 /* placeholder tile shown right after an upload; no image bytes to download */
@@ -104,103 +168,133 @@ h1 { font-size: 17px; margin: 0; letter-spacing: -0.2px; }
   display: -webkit-flex; display: flex;
   -webkit-align-items: center; align-items: center;
   -webkit-justify-content: center; justify-content: center;
-  color: #8a8a8e; font-size: 12px; letter-spacing: .3px;
+  color: #6b6b70; font-size: 12px; letter-spacing: .3px;
 }
 
 figcaption {
-  font-size: 11px;
-  color: #8a8a8e;
-  padding: 5px 8px 7px;
+  font-size: 12px;
+  color: #6b6b70;
+  padding: 6px 9px 8px;
   text-align: right;
+  font-variant-numeric: tabular-nums;
 }
+
+/* 30px disc, 44px tap area: the hit box is bigger than the ink */
 .del {
   position: absolute;
   top: 6px;
   right: 6px;
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   padding: 0;
   border: 0;
-  border-radius: 17px;
-  background: rgba(0,0,0,.55);
+  border-radius: 15px;
+  background: rgba(0,0,0,.45);
   color: #fff;
-  font-size: 19px;
-  line-height: 34px;
+  font-size: 17px;
+  line-height: 30px;
   text-align: center;
+  -webkit-transition: background-color .16s;
+  transition: background-color .16s;
+}
+.del::after {
+  content: "";
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  bottom: -7px;
+  left: -7px;
 }
 .del:active { background: rgba(0,0,0,.8); }
-.empty { margin: 40px 0; text-align: center; color: #8a8a8e; font-size: 14px; }
 
-/* --- footer --- */
-.foot {
-  display: -webkit-flex;
-  display: flex;
-  -webkit-justify-content: space-between;
-  justify-content: space-between;
-  padding: 12px 14px 24px;
-  font-size: 12px;
-  color: #8a8a8e;
+.empty {
+  -webkit-flex: 1 0 100%;
+  flex: 1 0 100%;
+  margin: 44px 0;
+  text-align: center;
+  color: #6b6b70;
+  font-size: 14px;
+  line-height: 1.45;
+}
+.empty strong {
+  display: block;
+  margin-bottom: 3px;
+  color: #111;
+  font-size: 15px;
+  font-weight: 600;
 }
 
-/* --- login --- */
-.centered {
+/* --- footer: pinned to the bottom of short pages by the flex body --- */
+.foot {
+  padding: 12px 0 24px;
+  font-size: 12px;
+  color: #6b6b70;
+}
+.foot .wrap {
   display: -webkit-flex;
   display: flex;
   -webkit-align-items: center;
   align-items: center;
-  -webkit-justify-content: center;
-  justify-content: center;
-  min-height: 100%;
-  padding: 20px;
+  -webkit-justify-content: space-between;
+  justify-content: space-between;
 }
-.login {
-  width: 100%;
-  max-width: 300px;
-  padding: 20px 18px 22px;
-  background: #fff;
-  border-radius: 14px;
-  text-align: center;
+.foot span { margin-left: auto; }
+
+/* --- pointer devices: hover feedback, never required to act --- */
+@media (hover: hover) {
+  .tile {
+    -webkit-transition: box-shadow .16s;
+    transition: box-shadow .16s;
+  }
+  .tile:hover { box-shadow: 0 2px 12px rgba(0,0,0,.10); }
+  .del:hover, .del:focus { background: rgba(0,0,0,.8); }
+  .pick:hover { border-color: #0a84ff; }
+  a:hover { text-decoration: underline; text-underline-offset: 2px; }
 }
-.login p { margin: 10px 0 16px; color: #6b6b70; font-size: 14px; }
-.login input {
-  width: 100%;
-  min-height: 46px;
-  font-size: 17px;
-  text-align: center;
-  letter-spacing: 6px;
-  border: 1px solid #cfcfd6;
-  border-radius: 10px;
-  padding: 10px;
+.del:focus-visible,
+.thumb:focus-visible {
+  outline: 2px solid #0a84ff;
+  outline-offset: -2px;      /* inside the tile: overflow:hidden would clip it */
 }
-.login button {
-  width: 100%;
-  min-height: 46px;
-  margin-top: 12px;
-  border: 0;
-  border-radius: 10px;
-  background: #0a84ff;
-  color: #fff;
-  font-size: 16px;
-  font-weight: 600;
-}
-.error { color: #d70015; font-size: 13px; margin-top: 10px; }
 
 /* --- wider phone (390pt and up) --- */
 @media (min-width: 375px) {
-  .bar { padding: 14px 16px; }
+  .bar { padding: 13px 0; }
   h1 { font-size: 18px; }
-  .uploader { padding: 16px 16px 6px; }
-  .pick { min-height: 60px; }
+  .uploader { padding: 16px 0 4px; }
+  .pick { min-height: 58px; }
   .pick-label { font-size: 17px; }
-  .gallery { padding: 8px 12px 24px; }
-  .tile { width: -webkit-calc(33.333% - 8px); width: calc(33.333% - 8px); }
-  .thumb { height: 108px; }
-  .thumb img, .thumb video { min-height: 108px; }
-  .foot { padding: 14px 16px 28px; }
+  .gallery { padding: 8px 0 24px; }
+  .tile { width: -webkit-calc(33.333% - 10px); width: calc(33.333% - 10px); }
+  .thumb, .thumb img, .thumb video { height: 118px; }
+  .pending { font-size: 11px; }
+  .foot { padding: 14px 0 28px; }
 }
 
-/* --- landscape / tablet --- */
-@media (min-width: 640px) {
-  .gallery { max-width: 720px; margin: 0 auto; }
-  .uploader, .bar, .foot { max-width: 720px; margin-left: auto; margin-right: auto; }
+/* --- laptop (MacBook): use the width, compact the uploader into a toolbar --- */
+@media (min-width: 1024px) {
+  .wrap { padding: 0 28px; }
+  .bar { padding: 14px 0; }
+  h1 { font-size: 19px; letter-spacing: -0.3px; }
+  .uploader {
+    display: -webkit-flex;
+    display: flex;
+    -webkit-align-items: center;
+    align-items: center;
+    padding: 22px 0 0;
+  }
+  .pick {
+    width: auto;
+    min-height: 48px;
+    padding: 0 22px;
+    -webkit-flex: 0 0 auto;
+    flex: 0 0 auto;
+  }
+  .pick-label { font-size: 16px; }
+  .status { margin: 0 0 0 16px; }
+  .gallery { padding: 14px 0 32px; }
+  .tile { width: -webkit-calc(20% - 10px); width: calc(20% - 10px); }
+  .thumb, .thumb img, .thumb video { height: 200px; }
+  .pending { font-size: 12px; }
+  .foot { padding: 16px 0 32px; font-size: 12px; }
 }
