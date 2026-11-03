@@ -1,0 +1,14 @@
+services:
+  photobridge:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      PIN: "2468"            # change me
+      MAX_MB: "100"
+    volumes:
+      - photos:/app/uploads   # survives redeploys — the whole point
+
+volumes:
+  photos:
