@@ -1,7 +1,9 @@
-/* Photo Bridge — 320pt iPhone 4S first, then 390pt iPhone 11, then a MacBook.
+/* 114s — 320pt iPhone 4S first, then 390pt iPhone 11, then a MacBook.
    iOS 9 constraints: -webkit- flexbox prefixes, no CSS grid, no object-fit,
    no clamp(), no backdrop-filter, no :focus-visible. Anything newer lives
-   behind @supports or a min-width the 4S never matches. */
+   behind @supports or a min-width the 4S never matches.
+   True black, no colour cast: OLED pixels stay off and the home-screen icon is
+   the only place purple appears. Still no new images or requests. */
 
 /* Space Grotesk, self-hosted and served from this app: the 4S rejects every
    TLS chain, so fonts.googleapis.com is unreachable for it, and iOS 9 has no
@@ -24,6 +26,7 @@
 
 * { -webkit-box-sizing: border-box; box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
+html { background: #000; }
 body {
   display: -webkit-flex;
   display: flex;
@@ -31,14 +34,14 @@ body {
   flex-direction: column;
   min-height: 100vh;
   font: 16px/1.35 "Space Grotesk", -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif;
-  background: #f2f2f7;
-  color: #111;
+  background: #000;
+  color: #f5f5f5;
   -webkit-text-size-adjust: 100%;
   -webkit-tap-highlight-color: rgba(0,0,0,0);
 }
-a { color: #0a84ff; text-decoration: none; }
-h1 { font-size: 17px; margin: 0; letter-spacing: -0.2px; }
-::selection { background: rgba(10,132,255,.22); }
+body.locked { overflow: hidden; }
+a { color: #f5f5f5; text-decoration: none; }
+::selection { background: rgba(255,255,255,.22); }
 
 /* --- one container for header, gallery and footer --- */
 .wrap {
@@ -59,8 +62,8 @@ main.wrap {
   top: 0;
   z-index: 5;
   padding: 12px 0;
-  background: #fff;
-  border-bottom: 1px solid #d8d8dc;
+  background: #000;
+  border-bottom: 1px solid #1e1e1e;
 }
 .bar .wrap {
   display: -webkit-flex;
@@ -70,10 +73,16 @@ main.wrap {
   -webkit-justify-content: space-between;
   justify-content: space-between;
 }
-.count { font-size: 13px; color: #6b6b70; }
+.count { font-size: 13px; color: #9a9a9a; }
 
-/* --- uploader --- */
+/* --- uploader + sort --- */
 .uploader { position: relative; padding: 14px 0 2px; }
+.row {
+  display: -webkit-flex;
+  display: flex;
+  -webkit-align-items: center;
+  align-items: center;
+}
 /* clipped, not display:none: the file input must stay reachable by keyboard */
 #picker {
   position: absolute;
@@ -86,6 +95,9 @@ main.wrap {
   clip: rect(0 0 0 0);
 }
 .pick {
+  -webkit-flex: 1 1 auto;
+  flex: 1 1 auto;
+  min-width: 0;
   display: -webkit-flex;
   display: flex;
   -webkit-align-items: center;
@@ -93,19 +105,19 @@ main.wrap {
   -webkit-justify-content: center;
   justify-content: center;
   min-height: 54px;
-  border: 1.5px dashed #b9c6d6;
+  border: 1.5px dashed #2e2e2e;
   border-radius: 12px;
-  background: #fff;
-  color: #0a84ff;
+  background: #0b0b0b;
+  color: #f5f5f5;
   font-weight: 600;
   cursor: pointer;
   -webkit-transition: background-color .16s, border-color .16s;
   transition: background-color .16s, border-color .16s;
 }
-.pick:active { background: #eef5ff; border-color: #0a84ff; }
+.pick:active { background: #161616; border-color: #8a8a8a; }
 #picker:focus + .pick {
-  border-color: #0a84ff;
-  box-shadow: 0 0 0 3px rgba(10,132,255,.18);
+  border-color: #8a8a8a;
+  box-shadow: 0 0 0 3px rgba(255,255,255,.18);
 }
 .pick-plus {
   font-size: 22px;
@@ -114,13 +126,21 @@ main.wrap {
   margin-right: 8px;
 }
 .pick-label { font-size: 16px; }
+.sort {
+  -webkit-flex: 0 0 auto;
+  flex: 0 0 auto;
+  padding: 12px 2px 12px 14px;
+  font-size: 13px;
+  color: #9a9a9a;
+}
+.sort:active { color: #f5f5f5; }
 .status {
   margin: 9px 2px 0;
   min-height: 18px;
   font-size: 13px;
-  color: #0a84ff;
+  color: #f5f5f5;
 }
-.status.err { color: #d70015; }
+.status.err { color: #ff6b6b; }
 
 /* --- gallery: 2 up at 320pt, 3 up from 375pt, 5 up on a laptop --- */
 .gallery {
@@ -138,15 +158,17 @@ main.wrap {
   width: -webkit-calc(50% - 10px);
   width: calc(50% - 10px);
   margin: 5px;
-  background: #fff;
+  background: #0b0b0b;
+  border: 1px solid #1e1e1e;
   border-radius: 12px;
   overflow: hidden;
 }
 .thumb {
+  position: relative;
   display: block;
   height: 118px;
   overflow: hidden;
-  background: #e6e6eb;
+  background: #111;
 }
 /* iOS 9 has no object-fit: the image is cropped from the top by the box. */
 .thumb img, .thumb video {
@@ -163,9 +185,34 @@ main.wrap {
   }
 }
 
+/* No ffmpeg on the server, so a clip gets a glyph instead of a poster frame. */
+.thumb .play {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 44px;
+  height: 44px;
+  margin: -22px 0 0 -22px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.94);
+  -webkit-box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+.thumb .play:after {
+  content: "";
+  position: absolute;
+  left: 17px;
+  top: 13px;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 9px 0 9px 15px;
+  border-color: transparent transparent transparent #0a0a0a;
+}
+
 figcaption {
   font-size: 12px;
-  color: #6b6b70;
+  color: #9a9a9a;
   padding: 6px 9px 8px;
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -181,7 +228,7 @@ figcaption {
   padding: 0;
   border: 0;
   border-radius: 15px;
-  background: rgba(0,0,0,.45);
+  background: rgba(0, 0, 0, .6);
   color: #fff;
   font-size: 17px;
   line-height: 30px;
@@ -197,21 +244,21 @@ figcaption {
   bottom: -7px;
   left: -7px;
 }
-.del:active { background: rgba(0,0,0,.8); }
+.del:active { background: rgba(255, 255, 255, .85); }
 
 .empty {
   -webkit-flex: 1 0 100%;
   flex: 1 0 100%;
   margin: 44px 0;
   text-align: center;
-  color: #6b6b70;
+  color: #9a9a9a;
   font-size: 14px;
   line-height: 1.45;
 }
 .empty strong {
   display: block;
   margin-bottom: 3px;
-  color: #111;
+  color: #f5f5f5;
   font-size: 15px;
   font-weight: 600;
 }
@@ -220,7 +267,7 @@ figcaption {
 .foot {
   padding: 12px 0 24px;
   font-size: 12px;
-  color: #6b6b70;
+  color: #9a9a9a;
 }
 .foot .wrap {
   display: -webkit-flex;
@@ -232,27 +279,144 @@ figcaption {
 }
 .foot span { margin-left: auto; }
 
+/* --- viewer: absolute bars, because % heights inside old iOS flex are shaky --- */
+.viewer {
+  display: none;
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 20;
+  background: rgba(0, 0, 0, .97);
+}
+.viewer.on { display: block; }
+.vbar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 54px;
+  padding: 0 14px;
+  display: -webkit-flex;
+  display: flex;
+  -webkit-align-items: center;
+  align-items: center;
+  -webkit-justify-content: space-between;
+  justify-content: space-between;
+}
+.vcount {
+  font-size: 13px;
+  color: #9a9a9a;
+  font-variant-numeric: tabular-nums;
+}
+.vclose {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, .09);
+  color: #f5f5f5;
+  font-size: 22px;
+  line-height: 44px;
+  text-align: center;
+}
+.vstage {
+  position: absolute;
+  top: 54px;
+  right: 0;
+  bottom: 74px;
+  left: 0;
+  padding: 0 6px;
+  text-align: center;
+  overflow: hidden;
+}
+.vstage:after {
+  content: "";
+  display: inline-block;
+  height: 100%;
+  vertical-align: middle;
+}
+.vstage img, .vstage video {
+  display: inline-block;
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  vertical-align: middle;
+}
+.vnav {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 74px;
+  display: -webkit-flex;
+  display: flex;
+}
+.vprev, .vnext {
+  -webkit-flex: 1 1 0;
+  flex: 1 1 0;
+  margin: 8px;
+  border: 0;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .09);
+  color: #f5f5f5;
+  font-size: 26px;
+  line-height: 1;
+}
+.vprev:active, .vnext:active { background: rgba(255, 255, 255, .22); }
+
+/* --- drop target: only fires on a device that has a mouse --- */
+body.dragging:after {
+  content: "Drop to add";
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 30;
+  display: -webkit-flex;
+  display: flex;
+  -webkit-align-items: center;
+  align-items: center;
+  -webkit-justify-content: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, .85);
+  border: 3px dashed #f5f5f5;
+  color: #f5f5f5;
+  font-size: 17px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
 /* --- pointer devices: hover feedback, never required to act --- */
 @media (hover: hover) {
   .tile {
-    -webkit-transition: box-shadow .16s;
-    transition: box-shadow .16s;
+    -webkit-transition: box-shadow .16s, border-color .16s;
+    transition: box-shadow .16s, border-color .16s;
   }
-  .tile:hover { box-shadow: 0 2px 12px rgba(0,0,0,.10); }
-  .del:hover, .del:focus { background: rgba(0,0,0,.8); }
-  .pick:hover { border-color: #0a84ff; }
+  .tile:hover {
+    border-color: #2e2e2e;
+  }
+  .del:hover, .del:focus { background: rgba(255, 255, 255, .85); }
+  .pick:hover { border-color: #8a8a8a; }
   a:hover { text-decoration: underline; text-underline-offset: 2px; }
 }
 .del:focus-visible,
-.thumb:focus-visible {
-  outline: 2px solid #0a84ff;
+.thumb:focus-visible,
+.sort:focus-visible,
+.vclose:focus-visible,
+.vprev:focus-visible,
+.vnext:focus-visible {
+  outline: 2px solid #f5f5f5;
   outline-offset: -2px;      /* inside the tile: overflow:hidden would clip it */
 }
 
 /* --- wider phone (390pt and up) --- */
 @media (min-width: 375px) {
   .bar { padding: 13px 0; }
-  h1 { font-size: 18px; }
   .uploader { padding: 16px 0 4px; }
   .pick { min-height: 58px; }
   .pick-label { font-size: 17px; }
@@ -266,13 +430,16 @@ figcaption {
 @media (min-width: 1024px) {
   .wrap { padding: 0 28px; }
   .bar { padding: 14px 0; }
-  h1 { font-size: 19px; letter-spacing: -0.3px; }
   .uploader {
     display: -webkit-flex;
     display: flex;
     -webkit-align-items: center;
     align-items: center;
     padding: 22px 0 0;
+  }
+  .row {
+    -webkit-flex: 1 1 auto;
+    flex: 1 1 auto;
   }
   .pick {
     width: auto;

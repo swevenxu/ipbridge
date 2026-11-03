@@ -4,7 +4,7 @@ A photo exchange site for two phones that have nothing in common: an iPhone 4S
 on iOS 9 (Safari only, no apps, **no working TLS trust**) and a modern iPhone.
 
 Plain Python 3 standard library. No dependencies, no database, no build step.
-Photos are files in a directory.
+Photos and videos are files in a directory.
 
 ## Why it looks like this
 
@@ -19,6 +19,14 @@ The 4S rejects every TLS chain we can serve it, so the site must answer on
 - ES5 JavaScript: no `fetch`, no `NodeList.forEach`, no arrow functions.
 - No CSS grid or `object-fit`: iOS 9 Safari doesn't have them. Flexbox with
   `-webkit-` prefixes and a fixed-height crop instead.
+- True-black OLED surfaces: `#000` page and header, near-black tiles, no
+  colour cast. The icon is where the purple lives. It is colour, not requests:
+  no extra images, fonts or scripts.
+- Tapping a tile opens a full-screen viewer — swipe, the two buttons, or
+  arrows/Esc on a laptop. Files dropped on the page upload too. Both are ES5
+  and fall back to plain links with no JavaScript.
+- `/?sort=oldest` flips the gallery order; the toggle beside the uploader
+  links to it, so the order survives a reload and can be bookmarked.
 
 ## Run it
 
@@ -31,7 +39,7 @@ python3 app.py                   # http://<your-ip>:8080
 |---|---|---|
 | `PORT` | `8080` | Listen port |
 | `STORE` | `./uploads` | Where photos live |
-| `MAX_MB` | `100` | Per-request upload cap |
+| `MAX_MB` | `300` | Per-request upload cap, in memory |
 
 ## Test
 
@@ -39,8 +47,9 @@ python3 app.py                   # http://<your-ip>:8080
 python3 test_app.py
 ```
 
-Four checks: filename traversal, the login routes being gone, delete rejecting
-traversal, and a live round trip covering upload, gallery and delete.
+Six checks: filename traversal, byte-range serving, the sort toggle, the login
+routes being gone, delete rejecting traversal, and a live round trip covering
+upload, gallery and delete.
 
 ## Deploy
 
@@ -68,6 +77,29 @@ ephemeral, so without it every redeploy deletes the photos. `deploy/nginx.conf`
 is only needed if you want TLS on 443 for modern phones while keeping 80 plain
 for the 4S.
 
+
+## Videos
+
+`.mov` and `.mp4` take the same route as photos: same multipart upload, stored
+byte for byte, never transcoded. The grid draws a play glyph rather than a
+poster frame — a frame would need ffmpeg, and this project has no dependencies.
+Tapping a clip hands it to iOS's player, which fullscreens it on the 4S; there
+is no inline video on iOS 9.
+
+Two things decide whether a clip actually plays:
+
+- `/media/` answers **byte ranges** (`206`). iOS refuses to play video from a
+  server that replies `200` to a range request, and ranges also keep a long
+  clip out of memory when only part of it is being read.
+- The 4S is an A5 on iOS 9 and **cannot decode HEVC**. A modern iPhone records
+  HEVC 4K by default, so those clips will download but not play on the 4S.
+  Record in *Settings → Camera → Formats → Most Compatible* (H.264) at 1080p
+  or lower if the 4S has to play it. Fixing that server-side would mean
+  re-encoding, which is exactly what this app refuses to do.
+
+The upload cap is buffered in memory, so `MAX_MB` is also the RAM one upload
+can consume. Videos fill a disk far faster than photos; the footer shows the
+total, and nothing is deleted automatically.
 
 ## Security, plainly
 
