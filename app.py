@@ -54,6 +54,7 @@ PAGE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="format-detection" content="telephone=no">
 <title>114s</title>
+<link rel="apple-touch-icon" href="/static/icon-180.png">
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/app.js" defer></script>
 </head><body>
@@ -163,13 +164,14 @@ class Handler(BaseHTTPRequestHandler):
         ext = os.path.splitext(safe)[1].lower()
         ctype = {".css": "text/css; charset=utf-8",
                  ".js": "application/javascript; charset=utf-8",
-                 ".woff": "font/woff", ".ttf": "font/ttf"}.get(
+                 ".woff": "font/woff", ".ttf": "font/ttf",
+                 ".png": "image/png", ".ico": "image/x-icon"}.get(
                      ext, "application/octet-stream")
         with open(path, "rb") as fh:
             data = fh.read()
         # fonts cache for a day; no-cache on code: a cached app.js silently
         # disables client fixes on old browsers
-        cache = "public, max-age=86400" if ext in (".woff", ".ttf") else "no-cache"
+        cache = "public, max-age=86400" if ext in (".woff", ".ttf", ".png", ".ico") else "no-cache"
         self.send_body(200, ctype, data, {"Cache-Control": cache})
 
     def media(self, name):
