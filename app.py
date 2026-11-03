@@ -335,7 +335,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.json(400, {"ok": False, "error": "bad name"})
         path = os.path.join(STORE, name)
         if not os.path.isfile(path):
-            return self.json(404, {"ok": False, "error": "not found"})
+            # Idempotent: a double tap or a stale tile must not look like a failure.
+            return self.json(200, {"ok": True, "already_gone": True})
         os.remove(path)
         return self.json(200, {"ok": True})
 

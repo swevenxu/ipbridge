@@ -69,21 +69,29 @@
       event.preventDefault();
       var name = this.getAttribute('data-name');
       if (!window.confirm('Delete this photo?')) { return; }
+      var button = this;
       var tile = this.parentNode;
+      button.disabled = true;                  // no double-fire on a slow tap
       var xhr = new XMLHttpRequest();
       xhr.open('POST', '/delete');
       xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
       xhr.onload = function () {
-        if (xhr.status === 200) {
+        // 200 = deleted, 404 = already gone; both mean "it's not there any more"
+        if (xhr.status === 200 || xhr.status === 404) {
           if (tile.parentNode) { tile.parentNode.removeChild(tile); }
           say('Deleted');
         } else if (xhr.status === 403) {
+          button.disabled = false;
           say('Signed out. Reload the page.', true);
         } else {
+          button.disabled = false;
           say('Delete failed (' + xhr.status + ')', true);
         }
       };
-      xhr.onerror = function () { say('Network error during delete', true); };
+      xhr.onerror = function () {
+        button.disabled = false;
+        say('Network error during delete', true);
+      };
       xhr.send('name=' + encodeURIComponent(name));
     });
   }
