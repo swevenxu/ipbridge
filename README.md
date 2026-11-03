@@ -44,14 +44,30 @@ HTTP round trip covering 403-without-cookie, login, upload, gallery, delete.
 
 ## Deploy
 
+Any box with Docker works; the goal is one port the 4S can reach without TLS.
+
+**One-shot on a fresh VPS** (Ubuntu/Debian, root):
+
 ```bash
+PIN=246801 HOST_PORT=80 bash deploy/bootstrap.sh
+```
+
+It installs Docker, clones this repo to `/opt/ipbridge`, writes `.env`, starts
+the container on port 80, and prints the URL. Open the port in your provider's
+firewall/security list afterwards.
+
+**Manual:**
+
+```bash
+printf 'PIN=246801\nHOST_PORT=80\n' > .env     # PIN is required, compose refuses to start without it
 docker compose up -d --build
 ```
 
 The `photos` volume is the part that matters — container filesystems are
-ephemeral, so without it every redeploy deletes the photos. For a public host,
-put `deploy/nginx.conf` in front: port 80 stays plain HTTP for the 4S, port 443
-serves the 11 with a real certificate.
+ephemeral, so without it every redeploy deletes the photos. `deploy/nginx.conf`
+is only needed if you want TLS on 443 for modern phones while keeping 80 plain
+for the 4S.
+
 
 ## Security, plainly
 
