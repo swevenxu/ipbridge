@@ -39,7 +39,7 @@ python3 app.py                   # http://<your-ip>:8080
 |---|---|---|
 | `PORT` | `8080` | Listen port |
 | `STORE` | `./uploads` | Where photos live |
-| `MAX_MB` | `300` | Per-request upload cap, in memory |
+| `MAX_MB` | unset | Optional ceiling for one file; unset means the free disk |
 
 ## Test
 
@@ -47,10 +47,13 @@ python3 app.py                   # http://<your-ip>:8080
 python3 test_app.py
 ```
 
-Eight checks: filename traversal, byte-range serving, the sort toggle, an
+Twelve checks: filename traversal, byte-range serving, the sort toggle, an
 original download plus a readable streamed zip, remove-all refusing anything
 but the word DELETE, the login routes being gone, delete rejecting traversal,
-and a live round trip covering upload, gallery and delete.
+and a live round trip covering upload, gallery and delete. The upload path adds
+four of its own: a 512 KB file survives byte for byte, a body that stops early
+is refused and stores nothing, a chunked body (what the 4S sends) parses, and
+an oversized request is refused with the connection closed instead of poisoned.
 
 ## Deploy
 
@@ -98,9 +101,12 @@ Two things decide whether a clip actually plays:
   or lower if the 4S has to play it. Fixing that server-side would mean
   re-encoding, which is exactly what this app refuses to do.
 
-The upload cap is buffered in memory, so `MAX_MB` is also the RAM one upload
-can consume. Videos fill a disk far faster than photos; the footer shows the
-total, and nothing is deleted automatically.
+Uploads stream straight to disk, so a 2 GB clip costs disk space rather than
+RAM, and the server never holds a whole video in memory. A request that stops
+early is refused (`400`, nothing saved) instead of being stored at whatever
+length arrived, and the page knows the size limit and refuses an oversized
+pick before it starts. Videos fill a disk far faster than photos; the footer
+shows the total, and nothing is deleted automatically.
 
 ## Getting files out
 

@@ -65,54 +65,118 @@
   }
 
   var busy = false;
+  var MAX = picker ? parseInt(picker.getAttribute('data-max'), 10) || 0 : 0;
 
+  // One file at a time, with one retry. A long POST from the 4S can be dropped
+  // mid-flight with nothing but a network error, and a second attempt costs
+  // nothing when the first one stored no bytes.
   function uploadAll(files) {
     if (!files || !files.length || busy) { return; }
     busy = true;
     var total = files.length;
     var index = 0;
 
-    function step() {
-      if (index >= total) {
-        busy = false;
-        if (picker) { picker.value = ''; }
+    function finish() {
+      busy = false;
+      if (picker) { picker.value = ''; }
+    }
+
+    function next() {
+      if (index >= total) { finish(); return; }
+      var file = files[index];
+      if (MAX && file.size > MAX) {
+        say(human(file.size) + ' is more than the ' + human(MAX) + ' the server can take', true);
+        index += 1;
+        next();
         return;
       }
-      var file = files[index];
+      send(file, false);
+    }
+
+    function send(file, retry) {
       var fd = new FormData();
       try { fd.append('photo', file, file.name); }
       catch (e) { fd.append('photo', file); }
       var xhr = new XMLHttpRequest();
-      xhr.open('POST', '/upload');
-      xhr.upload.onprogress = function (event) {
-        if (event.lengthComputable) {
-          say('Uploading ' + (index + 1) + ' of ' + total +
-              ' \u2014 ' + Math.round(event.loaded / event.total * 100) + '%');
+      var started = new Date().getTime();
+      var moved = 0;
+      var timer = null;
+
+      function watch() {                       // no byte for 90 s: give up on it
+        if (timer) { clearTimeout(timer); }
+        timer = setTimeout(function () {
+          xhr.onabort = null;
+          try { xhr.abort(); } catch (e) {}
+          failed(moved);
+        }, 90000);
+      }
+
+      function stop() {
+        if (timer) { clearTimeout(timer); timer = null; }
+      }
+
+      function failed(sent) {
+        stop();
+        if (!retry) {
+          say('Connection dropped \u2014 trying once more', true);
+          setTimeout(function () { send(file, true); }, 1500);
+          return;
         }
-      };
+        if (!sent) {
+          say('Nothing left the phone. Safari could not send ' + human(file.size) +
+              ' \u2014 try a shorter clip, or free space on the phone.', true);
+        } else {
+          say('Upload failed after ' + Math.round(sent / file.size * 100) +
+              '% and nothing was saved.', true);
+        }
+        finish();
+      }
+
+      xhr.open('POST', '/upload');
+      if (xhr.upload) {
+        xhr.upload.onprogress = function (event) {
+          if (!event.lengthComputable) { return; }
+          moved = event.loaded;
+          watch();
+          var secs = (new Date().getTime() - started) / 1000;
+          var rate = secs > 1 ? ' at ' + human(event.loaded / secs) + '/s' : '';
+          say('Uploading ' + (index + 1) + ' of ' + total + ' \u2014 ' +
+              Math.round(event.loaded / event.total * 100) + '%' + rate);
+        };
+      }
+      watch();
       xhr.onload = function () {
+        stop();
         if (xhr.status === 200) {
           var saved = [];
           try { saved = JSON.parse(xhr.responseText).saved || []; } catch (e) {}
           if (saved.length) { addTile(saved[0], file); }
           index += 1;
           say('Uploaded ' + index + ' of ' + total);
-          step();
-        } else {
-          busy = false;
-          var msg = 'Upload failed (' + xhr.status + ')';
-          try { msg = JSON.parse(xhr.responseText).error || msg; } catch (e) {}
-          say(msg, true);
+          next();
+          return;
         }
+        var msg = 'Upload failed (' + xhr.status + ')';
+        try { msg = JSON.parse(xhr.responseText).error || msg; } catch (e) {}
+        if (xhr.status === 413) {              // a size refusal will not change
+          say(msg, true);
+          finish();
+          return;
+        }
+        if (!retry) {
+          say(msg + ' \u2014 retrying once', true);
+          setTimeout(function () { send(file, true); }, 1500);
+          return;
+        }
+        say(msg, true);
+        finish();
       };
-      xhr.onerror = function () {
-        busy = false;
-        say('Network error during upload', true);
-      };
+      xhr.onerror = function () { failed(moved); };
+      xhr.onabort = function () { failed(moved); };
       xhr.send(fd);
     }
 
-    step();
+    next();
   }
 
   picker.addEventListener('change', function () { uploadAll(picker.files); });

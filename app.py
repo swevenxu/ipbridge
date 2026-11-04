@@ -5,11 +5,11 @@ Runs on the Python standard library alone. One file of state: the uploads dir.
 
     python3 app.py                     # http://<host>:8080
 """
-import email
-import email.policy
 import html
 import os
 import re
+import shutil
+import tempfile
 import time
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,8 +23,8 @@ STATIC = os.path.join(ROOT, "static")
 PORT = int(os.environ.get("PORT") or os.environ.get("SERVER_PORT") or 8080)
 
 
-MAX_BYTES = int(os.environ.get("MAX_MB", "300")) * 1024 * 1024
 MEDIA = {".jpg", ".jpeg", ".png", ".gif", ".heic", ".mov", ".mp4"}
+DISK_RESERVE = 256 * 1024 * 1024    # never let one upload fill the volume
 
 os.makedirs(STORE, exist_ok=True)
 os.makedirs(THUMBS, exist_ok=True)
@@ -80,6 +80,22 @@ def human(n: int) -> str:
         n /= 1024.0
 
 
+def upload_limit():
+    """Largest single upload, in bytes.
+
+    The free space on the volume, less a reserve, so one clip can never be the
+    thing that fills the disk and takes the app down with it. MAX_MB, when set,
+    is still a ceiling on top of that.
+    """
+    try:
+        free = shutil.disk_usage(STORE).free
+    except OSError:
+        free = 0
+    room = max(0, free - DISK_RESERVE)
+    hard = int(os.environ.get("MAX_MB") or 0) * 1024 * 1024
+    return min(room, hard) if hard else room
+
+
 PAGE = """<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
@@ -100,7 +116,7 @@ PAGE = """<!doctype html>
 <main class="wrap">
   <section class="uploader">
     <div class="row">
-      <input id="picker" type="file" name="photo" accept="image/*,video/*" multiple>
+      <input id="picker" type="file" name="photo" accept="image/*,video/*" multiple data-max="__MAX__">
       <label class="pick" for="picker">
         <span class="pick-plus">+</span>
         <span class="pick-label">Add photos</span>
@@ -155,6 +171,229 @@ def tiles(order="newest"):
     return "".join(out)
 
 
+class TooLarge(Exception):
+    pass
+
+
+class BadUpload(Exception):
+    pass
+
+
+class RequestBody:
+    """The request body as a stream, chunked or not.
+
+    iOS 9 Safari uploads with Transfer-Encoding: chunked; a reader that trusts
+    Content-Length alone sees an empty body there. read() returns b"" at the
+    end either way, and counts what it handed out.
+    """
+
+    CHUNK = 65536
+
+    def __init__(self, rfile, headers):
+        self.rfile = rfile
+        self.chunked = "chunked" in (headers.get("Transfer-Encoding") or "").lower()
+        self.left = None if self.chunked else int(headers.get("Content-Length") or 0)
+        self.in_chunk = 0
+        self.finished = False
+        self.count = 0
+
+    def _next_chunk(self):
+        line = self.rfile.readline(1024)
+        if not line:
+            self.finished = True
+            return
+        try:
+            size = int(line.strip().split(b";")[0] or b"0", 16)
+        except ValueError:
+            self.finished = True
+            return
+        if size == 0:
+            while True:                              # trailers, then the end
+                line = self.rfile.readline(1024)
+                if line in (b"\r\n", b"\n", b""):
+                    break
+            self.finished = True
+            return
+        self.in_chunk = size
+
+    def read(self, size=CHUNK):
+        if self.finished:
+            return b""
+        if self.chunked:
+            if not self.in_chunk:
+                self._next_chunk()
+                if self.finished:
+                    return b""
+            data = self.rfile.read(min(size, self.in_chunk))
+            if not data:
+                self.finished = True
+                return b""
+            self.in_chunk -= len(data)
+            if not self.in_chunk:
+                self.rfile.read(2)                   # the CRLF closing the chunk
+        else:
+            if not self.left:
+                self.finished = True
+                return b""
+            data = self.rfile.read(min(size, self.left))
+            if not data:
+                self.finished = True
+                return b""
+            self.left -= len(data)
+        self.count += len(data)
+        return data
+
+    def drain(self, cap=65536):
+        total = 0
+        while total < cap:
+            data = self.read()
+            if not data:
+                return
+            total += len(data)
+
+
+class _Stream:
+    """Buffered reader for a multipart body: one chunk plus a boundary at most."""
+
+    def __init__(self, body):
+        self.body = body
+        self.buf = bytearray()
+
+    def more(self):
+        data = self.body.read()
+        if not data:
+            return False
+        self.buf += data
+        return True
+
+    def need(self, n):
+        while len(self.buf) < n:
+            if not self.more():
+                raise BadUpload("body ended early")
+
+    def until(self, marker, cap=65536):
+        while True:
+            i = self.buf.find(marker)
+            if i >= 0:
+                out = bytes(self.buf[:i])
+                del self.buf[:i + len(marker)]
+                return out
+            if len(self.buf) > cap:
+                raise BadUpload("header too long")
+            if not self.more():
+                raise BadUpload("body ended early")
+
+
+class _Sink:
+    """Where a non-file part goes: nowhere, but the bytes still have to move."""
+
+    written = 0
+
+    def write(self, data):
+        self.written += len(data)
+        return len(data)
+
+    def close(self):
+        pass
+
+
+def _part_filename(headers):
+    m = re.search(r'filename="([^"]*)"', headers, re.I)
+    if not m:
+        m = re.search(r"filename=([^;\s]+)", headers, re.I)
+    return m.group(1) if m else None
+
+
+def _stored_name(stem, ext):
+    base = "%s-%s" % (stem or "photo", time.strftime("%Y%m%d-%H%M%S"))
+    name, n = base + ext, 2
+    while os.path.exists(os.path.join(STORE, name)):
+        name = "%s-%d%s" % (base, n, ext)
+        n += 1
+    return name
+
+
+def receive(body, boundary, limit):
+    """Write the file parts straight to disk; return the names stored.
+
+    Nothing bigger than a chunk and a boundary is held in memory, so a 2 GB
+    clip costs the disk, not the RAM. A body that ends before the closing
+    boundary raises BadUpload: partial bytes are never promoted to a file.
+    """
+    s = _Stream(body)
+    first = b"--" + boundary
+    while True:                                      # skip the preamble
+        i = s.buf.find(first)
+        if i >= 0:
+            del s.buf[:i + len(first)]
+            break
+        if len(s.buf) > 65536 or not s.more():
+            raise BadUpload("no boundary")
+    mark = b"\r\n--" + boundary
+    saved = []
+    while True:
+        s.need(2)
+        after = bytes(s.buf[:2])
+        del s.buf[:2]
+        if after == b"--":
+            break                                    # closing boundary
+        if after != b"\r\n":
+            raise BadUpload("bad boundary line")
+        s.need(2)
+        if bytes(s.buf[:2]) == b"\r\n":
+            del s.buf[:2]
+            headers = ""
+        else:
+            headers = s.until(b"\r\n\r\n", 16384).decode("latin-1")
+
+        name = _part_filename(headers)
+        base = safe_name(name) if name else ""
+        stem, ext = os.path.splitext(base)
+        target = tmp = None
+        if name and ext.lower() in MEDIA:
+            target = _stored_name(stem, ext.lower())
+            fd, tmp = tempfile.mkstemp(dir=STORE, prefix=".incoming-")
+            out = os.fdopen(fd, "wb")
+        else:
+            out = _Sink()
+        written = 0
+        try:
+            while True:
+                i = s.buf.find(mark)
+                if i >= 0:
+                    if limit and written + i > limit:
+                        raise TooLarge()
+                    out.write(bytes(s.buf[:i]))
+                    written += i
+                    del s.buf[:i + len(mark)]
+                    break
+                keep = len(mark)
+                if len(s.buf) > keep:
+                    take = len(s.buf) - keep
+                    if limit and written + take > limit:
+                        raise TooLarge()
+                    out.write(bytes(s.buf[:take]))
+                    written += take
+                    del s.buf[:take]
+                if not s.more():
+                    raise BadUpload("body ended inside a file")
+        except Exception:
+            out.close()
+            if tmp:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+            raise
+        out.close()
+        if tmp and written:
+            os.replace(tmp, os.path.join(STORE, target))
+            saved.append(target)
+        elif tmp:
+            os.remove(tmp)                           # an empty pick is not a file
+    return saved
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "photobridge"
@@ -172,7 +411,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header(k, v)
         self.end_headers()
         if self.command != "HEAD":
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                self.close_connection = True
 
     def form(self):
         n = int(self.headers.get("Content-Length") or 0)
@@ -198,7 +440,8 @@ class Handler(BaseHTTPRequestHandler):
                        .replace("__SORT_HREF__",
                                 "/?sort=oldest" if order == "newest" else "/")
                        .replace("__SORT_LABEL__",
-                                "Newest \u21c5" if order == "newest" else "Oldest \u21c5"))
+                                "Newest \u21c5" if order == "newest" else "Oldest \u21c5")
+                       .replace("__MAX__", str(upload_limit())))
             return self.send_body(200, "text/html; charset=utf-8", body.encode())
         if path.startswith("/media/"):
             return self.media(unquote(path[len("/media/"):]))
@@ -330,68 +573,47 @@ class Handler(BaseHTTPRequestHandler):
             return self.delete_all()
         return self.send_body(404, "text/plain", b"not found")
 
-    def body(self):
-        """Request body, chunked or not.
-
-        iOS 9 Safari uploads with Transfer-Encoding: chunked. Reading only
-        Content-Length there gives an empty body, and answering before the
-        client finishes makes the phone see a reset instead of a response.
-        """
-        if "chunked" in (self.headers.get("Transfer-Encoding") or "").lower():
-            out = []
-            total = 0
-            while True:
-                line = self.rfile.readline(1024)
-                if not line:
-                    break
-                size = int(line.strip().split(b";")[0] or b"0", 16)
-                if size == 0:
-                    while True:                      # trailers
-                        trailer = self.rfile.readline(1024)
-                        if trailer in (b"\r\n", b"\n", b""):
-                            break
-                    break
-                total += size
-                if total > MAX_BYTES:
-                    raise ValueError("too large")
-                out.append(self.rfile.read(size))
-                self.rfile.read(2)                   # CRLF after each chunk
-            return b"".join(out)
-        n = int(self.headers.get("Content-Length") or 0)
-        if n > MAX_BYTES:
-            raise ValueError("too large")
-        return self.rfile.read(n) if n > 0 else b""
-
     def upload(self):
         ctype = self.headers.get("Content-Type") or ""
         m = re.search(r'boundary="?([^";]+)"?', ctype)
         if "multipart/form-data" not in ctype or not m:
-            return self.json(400, {"ok": False, "error": "expected multipart"})
+            self.close_connection = True
+            return self.json(400, {"ok": False, "error": "expected multipart"}, close=True)
+        limit = upload_limit()
+        started = time.time()
+        known = int(self.headers.get("Content-Length") or 0)
+        if known and known > limit:
+            # Refuse before reading: draining gigabytes just to say no wastes
+            # the phone's uplink and its battery. The page checks the same
+            # number before it starts, so this is the backstop.
+            self.close_connection = True
+            self.log_message("upload refused: content-length %d over limit %d",
+                             known, limit)
+            return self.json(413, {"ok": False, "error": "too large",
+                                   "limit": limit}, close=True)
+        body = RequestBody(self.rfile, self.headers)
         try:
-            raw = self.body()
-        except ValueError:
-            return self.json(413, {"ok": False, "error": "file too large"})
-        if not raw:
-            return self.json(400, {"ok": False, "error": "empty body"})
-        msg = email.parser.BytesParser(policy=email.policy.default).parsebytes(
-            b"Content-Type: multipart/form-data; boundary=" + m.group(1).encode()
-            + b"\r\n\r\n" + raw)
-        saved = []
-        if not msg.is_multipart():
-            return self.json(400, {"ok": False, "error": "bad body"})
-        for part in msg.iter_parts():
-            name = part.get_filename()
-            data = part.get_payload(decode=True) or b""
-            if not name or not data:
-                continue
-            base = safe_name(name)
-            stem, ext = os.path.splitext(base)
-            if ext.lower() not in MEDIA:
-                continue
-            final = "%s-%s%s" % (stem or "photo", time.strftime("%Y%m%d-%H%M%S"), ext.lower())
-            with open(os.path.join(STORE, final), "wb") as fh:
-                fh.write(data)
-            saved.append(final)
+            saved = receive(body, m.group(1).encode("latin-1", "replace"), limit)
+        except TooLarge:
+            self.close_connection = True
+            self.log_message("upload refused mid-body after %d bytes (limit %d)",
+                             body.count, limit)
+            return self.json(413, {"ok": False, "error": "too large",
+                                   "limit": limit}, close=True)
+        except (BadUpload, OSError) as exc:
+            # A dropped connection lands here. Nothing partial is kept, and the
+            # connection is closed rather than left holding half a request.
+            self.close_connection = True
+            self.log_message("upload incomplete after %d bytes: %s", body.count, exc)
+            return self.json(400, {"ok": False,
+                                   "error": "upload incomplete, nothing was saved"},
+                             close=True)
+        body.drain(65536)                            # trailing CRLF, chunk end
+        if not body.finished:
+            self.close_connection = True
+        self.log_message("upload ok: %d bytes, %s, %.1fs, %d file(s)",
+                         body.count, "chunked" if body.chunked else "content-length",
+                         time.time() - started, len(saved))
         return self.json(200, {"ok": True, "saved": saved})
 
     def delete(self):
@@ -419,9 +641,10 @@ class Handler(BaseHTTPRequestHandler):
                 pass
         return self.json(200, {"ok": True, "deleted": gone})
 
-    def json(self, code, obj):
+    def json(self, code, obj, close=False):
         import json as _json
-        self.send_body(code, "application/json", _json.dumps(obj).encode())
+        self.send_body(code, "application/json", _json.dumps(obj).encode(),
+                       {"Connection": "close"} if close else None)
 
 
 if __name__ == "__main__":

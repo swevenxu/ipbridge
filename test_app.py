@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""Minimal checks: filename safety, the upload round trip, and no login."""
+"""Minimal checks: filename safety, uploads that stream or refuse, and no login."""
 import http.client
 import io
+import json
 import os
 import tempfile
 import threading
 import unittest
 import uuid
 import zipfile
+from unittest import mock
+from urllib.parse import quote
 
 os.environ.setdefault("STORE", tempfile.mkdtemp(prefix="pb-test-"))
 os.environ.setdefault("PORT", "0")
@@ -66,6 +69,78 @@ class Live(unittest.TestCase):
                                 {"Content-Type": "application/x-www-form-urlencoded"})
         self.assertEqual(status, 200)
         self.assertEqual(app.media_files(), [])
+
+    def multipart(self, payload, boundary, filename="clip.mov"):
+        head = ('--%s\r\nContent-Disposition: form-data; name="photo"; '
+                'filename="%s"\r\nContent-Type: video/quicktime\r\n\r\n'
+                % (boundary, filename)).encode()
+        return head + payload + ("\r\n--%s--\r\n" % boundary).encode()
+
+    def test_upload_streams_large_files_unchanged(self):
+        boundary = uuid.uuid4().hex
+        payload = bytearray(os.urandom(512 * 1024))
+        payload[2000:2040] = b"\r\n--" + boundary[:-1].encode() + b"near-miss"
+        payload = bytes(payload)                       # a boundary lookalike inside
+        status, _, data = self.req(
+            "POST", "/upload", self.multipart(payload, boundary),
+            {"Content-Type": "multipart/form-data; boundary=" + boundary})
+        self.assertEqual(status, 200, data)
+        name = json.loads(data.decode())["saved"][0]
+        try:
+            self.assertEqual(os.path.getsize(os.path.join(app.STORE, name)),
+                             len(payload))
+            self.assertEqual(self.req("GET", "/media/" + quote(name))[2], payload)
+        finally:
+            os.remove(os.path.join(app.STORE, name))
+
+    def test_truncated_upload_is_rejected(self):
+        boundary = uuid.uuid4().hex
+        payload = os.urandom(200000)
+        body = self.multipart(payload, boundary)
+        body = body[:-len(("\r\n--%s--\r\n" % boundary).encode())]
+        before = set(app.media_files())
+        status, head, data = self.req(
+            "POST", "/upload", body,
+            {"Content-Type": "multipart/form-data; boundary=" + boundary})
+        self.assertEqual(status, 400)
+        self.assertIn(b"incomplete", data)
+        self.assertEqual(set(app.media_files()), before)   # no half-length file
+        self.assertEqual(head.get("Connection"), "close")
+        self.assertEqual(self.req("GET", "/")[0], 200)   # server still serving
+
+    def test_chunked_upload(self):
+        # iOS 9 Safari sends chunked, with no Content-Length to check.
+        boundary = uuid.uuid4().hex
+        payload = os.urandom(300000)
+        body = self.multipart(payload, boundary)
+        parts = [body[i:i + 65536] for i in range(0, len(body), 65536)]
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        c.request("POST", "/upload", body=iter(parts),
+                  headers={"Content-Type": "multipart/form-data; boundary=" + boundary,
+                           "Transfer-Encoding": "chunked"},
+                  encode_chunked=True)
+        r = c.getresponse()
+        data = r.read()
+        c.close()
+        self.assertEqual(r.status, 200, data)
+        name = json.loads(data.decode())["saved"][0]
+        try:
+            with open(os.path.join(app.STORE, name), "rb") as fh:
+                self.assertEqual(fh.read(), payload)
+        finally:
+            os.remove(os.path.join(app.STORE, name))
+
+    def test_oversized_upload_is_refused_cleanly(self):
+        boundary = uuid.uuid4().hex
+        before = set(app.media_files())
+        with mock.patch.object(app, "upload_limit", return_value=1024):
+            status, head, data = self.req(
+                "POST", "/upload", self.multipart(os.urandom(5000), boundary),
+                {"Content-Type": "multipart/form-data; boundary=" + boundary})
+        self.assertEqual(status, 413, data)
+        self.assertEqual(head.get("Connection"), "close")
+        self.assertEqual(set(app.media_files()), before)
+        self.assertEqual(self.req("GET", "/")[0], 200)
 
     def test_media_supports_byte_ranges(self):
         # iOS refuses to play video when a range request comes back as 200.

@@ -6,8 +6,7 @@ COPY static ./static
 RUN mkdir -p /app/uploads
 
 ENV PORT=8080 \
-    STORE=/app/uploads \
-    MAX_MB=100
+    STORE=/app/uploads
 
 EXPOSE 8080
 VOLUME ["/app/uploads"]
